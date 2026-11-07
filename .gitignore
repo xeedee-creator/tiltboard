@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller build output (the .spec files stay tracked - they rebuild tiltboard.exe)
+build/
+dist/
+
+# Runtime data: user uploads and chat history must never be committed.
+# A fresh clone starts with an empty board; both are auto-created on first run.
+data/
+chat.txt
+
+# Logs and local test leftovers (dev server, probes, one-off scripts)
+*.log
+dev.out
+dev.err
+posts.json
+js_dump.js
+js_test.js
+probe.py
+t1.txt
+t2.txt
+t3.txt
+nul
+tiltboard.exe.bak
+
+# Screenshot originals - only the compact .jpg versions are committed.
+screenshots/*.png
+
+# Live runtime header (a fresh clone gets no header until one is created).
+header.html
+
+# The standalone binary is published as a GitHub Release asset only, not in the repo.
+tiltboard.exe

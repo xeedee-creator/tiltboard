@@ -1,0 +1,117 @@
+/* Tiltboard — "terminal" style: retro CRT phosphor-green, monospace, hard edges */
+
+:root { color-scheme: dark;
+  --tb-ink: #8dffc4; --tb-accent: #5dff9d; --tb-muted: rgba(61, 255, 157, .55); } /* v1.15.0: shared header palette */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Cascadia Mono", Consolas, "Courier New", monospace;
+  background: #06120a;
+  min-height: 100vh;
+}
+/* scanline overlay for the CRT feel */
+body::after {
+  content: "";
+  position: fixed; inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .18) 0 2px, transparent 2px 4px);
+  z-index: 999;
+}
+.wrap { max-width: 640px; margin: 0 auto; padding: 8px 16px 64px; }
+
+form.composer { display: flex; gap: 8px; margin-bottom: 28px; }
+textarea#message,
+input#searchInput {  /* v1.14.x: search bar shares the composer text box's look */
+  resize: none;
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 16px;
+  font-family: inherit;
+  color: #5dff9d;
+  background: #081710;
+  border: 2px solid #1f7a44;
+  border-radius: 0;
+  outline: none;
+  overflow-y: hidden;  /* v1.5.10: height grows with content, no scrollbar */
+}
+textarea#message:focus { box-shadow: 0 0 12px rgba(61, 255, 157, .4); }
+span.user { display: inline-block; padding: 1px 8px; margin-right: 6px; border-radius: 0;
+  background: #0c2a19; color: #5dff9d; border: 1px solid #2f9e5c; font-weight: 700;
+  font-size: .82em; vertical-align: baseline; }
+form.composer.drop-target textarea#message {
+  border-style: dashed;
+  box-shadow: 0 0 18px rgba(61, 255, 157, .7);
+}
+
+button#post {
+  padding: 10px 22px;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: inherit;
+  letter-spacing: 2px;
+  color: #5dff9d;
+  background: #0c2a19;
+  border: 2px solid #5dff9d;
+  border-radius: 0;
+  cursor: pointer;
+  transition: filter .15s ease, transform .1s ease;
+}
+button#post:hover { background: #5dff9d; color: #06120a; box-shadow: 0 0 14px rgba(61, 255, 157, .6); }
+button#post:active { transform: scale(.97); }
+
+/* v1.5.2 pagination arrows */
+.pager { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 6px; }
+.arrow { font-size: 34px; line-height: 1; text-decoration: none; color: #5dff9d; padding: 0; user-select: none;
+  text-shadow: 0 0 8px rgba(61, 255, 157, .5); }
+a.arrow:hover { text-shadow: 0 0 14px rgba(61, 255, 157, .95); transform: scale(1.15); transition: transform .1s ease; }
+.arrow.disabled { opacity: .25; cursor: default; }
+.pager-info { font-size: 12px; color: rgba(61, 255, 157, .55); letter-spacing: .08em; text-transform: uppercase; }
+
+/* v1.7.0: row-major grid - --cols is set by JS from this visitor's cookie */
+.board { display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); gap: 18px; justify-items: center; padding-top: 8px; }
+
+.tilt {
+  --tilt: 0deg;
+  width: 100%; max-width: min(420px, 90%); /* v1.7.0: relax inside multi-column grids */
+  transform: rotate(var(--tilt));
+  padding: 16px 20px;
+  border-radius: 0;
+  font-size: 17px;
+  line-height: 1.5;
+  color: #8dffc4;
+  background-color: #081710;
+  border: 2px solid rgba(61, 255, 157, .3);
+  box-shadow: inset 0 0 18px rgba(61, 255, 157, .05), 0 4px 0 #0c2a19;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tilt[data-c="0"] { border-color: #ffe066; text-shadow: 0 0 5px rgba(255, 224, 102, .3); box-shadow: inset 0 0 18px rgba(255, 224, 102, .07), 0 4px 0 #2a2610; }
+.tilt[data-c="1"] { border-color: #ff7e9d; text-shadow: 0 0 5px rgba(255, 126, 157, .3); box-shadow: inset 0 0 18px rgba(255, 126, 157, .07), 0 4px 0 #2a1219; }
+.tilt[data-c="2"] { border-color: #5dff9d; text-shadow: 0 0 5px rgba(61, 255, 157, .3); box-shadow: inset 0 0 18px rgba(61, 255, 157, .07), 0 4px 0 #0c2a19; }
+.tilt[data-c="3"] { border-color: #6fd8ff; text-shadow: 0 0 5px rgba(111, 216, 255, .3); box-shadow: inset 0 0 18px rgba(111, 216, 255, .07), 0 4px 0 #0f2a2e; }
+.tilt[data-c="4"] { border-color: #c99aff; text-shadow: 0 0 5px rgba(201, 154, 255, .3); box-shadow: inset 0 0 18px rgba(201, 154, 255, .07), 0 4px 0 #20142e; }
+.tilt[data-c="5"] { border-color: #ffd93f; text-shadow: 0 0 5px rgba(255, 217, 63, .3); box-shadow: inset 0 0 18px rgba(255, 217, 63, .07), 0 4px 0 #2a2610; }
+.tilt[data-c="6"] { border-color: #9feaff; text-shadow: 0 0 5px rgba(159, 234, 255, .3); box-shadow: inset 0 0 18px rgba(159, 234, 255, .07), 0 4px 0 #0f2a2e; }
+.tilt[data-c="7"] { border-color: #ffab6b; text-shadow: 0 0 5px rgba(255, 171, 107, .3); box-shadow: inset 0 0 18px rgba(255, 171, 107, .07), 0 4px 0 #2a1d10; }
+.tilt[data-c="8"] { border-color: #b8ffc9; text-shadow: 0 0 5px rgba(184, 255, 201, .3); box-shadow: inset 0 0 18px rgba(184, 255, 201, .07), 0 4px 0 #0c2a19; }
+.tilt[data-c="9"] { border-color: #ffabcf; text-shadow: 0 0 5px rgba(255, 171, 207, .3); box-shadow: inset 0 0 18px rgba(255, 171, 207, .07), 0 4px 0 #2a121f; }
+
+.empty { color: #3e8a5c; font-style: italic; margin-top: 24px; }
+
+/* attachments (v1.4) - layout lives in app.py, theme visuals here */
+.tilt img.preview {
+  border: 2px solid rgba(61, 255, 157, .35);
+  box-shadow: 0 4px 0 #0c2a19;
+}
+.attach-img .dl { color: #8dffc4; background: rgba(6, 18, 10, .88); border: 2px solid rgba(61, 255, 157, .5); }
+.attach-img:hover .dl { background: rgba(61, 255, 157, .2); box-shadow: 0 0 10px rgba(61, 255, 157, .55); }
+.tilt a.download { color: #8dffc4; border-bottom: 2px solid rgba(61, 255, 157, .4); }
+.tilt a.download:hover { opacity: 1; filter: drop-shadow(0 0 6px rgba(61, 255, 157, .6)); }
+/* tilt delete cross (v1.5.4) */
+.tilt .del { color: #ff9d8f; background: rgba(6, 18, 10, .88); border: 2px solid rgba(255, 126, 107, .5); }
+.tilt .del:hover { color: #fff; background: rgba(255, 92, 74, .3); box-shadow: 0 0 10px rgba(255, 92, 74, .6); }
+button#attachBtn { --line: #1f7a44; --field: #081710; color: #5dff9d; }
+/* pending-file clip - phosphor green, the classic CRT glow (v1.10.2) */
+#pendingChip { color: #5dff9d; }
+/* emoji button (v1.5.5) - identical border to the attachment icon */
+button#emojiBtn { --line: #1f7a44; --field: #081710; color: #5dff9d; }

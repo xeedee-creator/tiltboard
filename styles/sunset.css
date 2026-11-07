@@ -1,0 +1,108 @@
+/* Tiltboard — "sunset" style: warm peachy light theme with a friendly serif voice */
+
+:root { color-scheme: light;
+  --tb-ink: #4a332b; --tb-accent: #d97b3f; --tb-muted: rgba(163, 77, 23, .65); } /* v1.15.0: shared header palette */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  background: linear-gradient(180deg, #fff3e2 0%, #ffe4c7 55%, #ffd9b8 100%);
+  min-height: 100vh;
+}
+.wrap { max-width: 640px; margin: 0 auto; padding: 8px 16px 64px; }
+
+form.composer { display: flex; gap: 8px; margin-bottom: 28px; }
+textarea#message,
+input#searchInput {  /* v1.14.x: search bar shares the composer text box's look */
+  resize: none;
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 16px;
+  font-family: inherit;
+  color: #5a3d2b;
+  background: #fffaf3;
+  border: 1.5px solid #e8975a;
+  border-radius: 4px 14px 4px 14px;
+  outline: none;
+  overflow-y: hidden;  /* v1.5.10: height grows with content, no scrollbar */
+}
+textarea#message:focus { box-shadow: 0 0 0 3px rgba(232, 151, 90, .28); }
+span.user { display: inline-block; padding: 1px 8px; margin-right: 6px; border-radius: 4px;
+  background: #ffe1c2; color: #a34d17; border: 1.5px solid #e8975a; font-weight: 700;
+  font-size: .82em; vertical-align: baseline; }
+form.composer.drop-target textarea#message {
+  border-style: dashed;
+  box-shadow: 0 0 0 3px rgba(232, 151, 90, .4);
+}
+
+button#post {
+  padding: 10px 22px;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: inherit;
+  color: #fff8ef;
+  background: linear-gradient(135deg, #f07a4b, #e8975a);
+  border: none;
+  border-radius: 4px 14px 4px 14px;
+  cursor: pointer;
+  box-shadow: 0 3px 8px rgba(214, 116, 55, .35);
+  transition: filter .15s ease, transform .1s ease;
+}
+button#post:hover { filter: brightness(1.1) saturate(1.15); }
+button#post:active { transform: scale(.97); }
+
+/* v1.5.2 pagination arrows */
+.pager { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 6px; }
+.arrow { font-size: 34px; line-height: 1; text-decoration: none; color: #d97b3f; padding: 0; user-select: none; }
+a.arrow:hover { color: #b85c22; transform: scale(1.15); transition: transform .1s ease; }
+.arrow.disabled { opacity: .25; cursor: default; }
+.pager-info { font-size: 12px; color: rgba(163, 77, 23, .65); letter-spacing: .08em; text-transform: uppercase; }
+
+/* v1.7.0: row-major grid - --cols is set by JS from this visitor's cookie */
+.board { display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); gap: 18px; justify-items: center; padding-top: 8px; }
+
+.tilt {
+  --tilt: 0deg;
+  width: 100%; max-width: min(420px, 90%); /* v1.7.0: relax inside multi-column grids */
+  transform: rotate(var(--tilt));
+  padding: 16px 20px;
+  border-radius: 8px 18px 8px 18px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: #4a332b;
+  background-color: #fffdf9;
+  border: 1.5px solid #e6c9a3;
+  box-shadow: 0 5px 14px rgba(178, 106, 48, .22);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tilt[data-c="0"] { border-color: #f2b134; background: #fff9e8; box-shadow: 0 5px 14px rgba(200, 150, 40, .28); }
+.tilt[data-c="1"] { border-color: #ef6a8a; background: #ffeff3; box-shadow: 0 5px 14px rgba(200, 90, 120, .28); }
+.tilt[data-c="2"] { border-color: #4fae7c; background: #eefaf2; box-shadow: 0 5px 14px rgba(60, 150, 110, .28); }
+.tilt[data-c="3"] { border-color: #4f9fd8; background: #edf7ff; box-shadow: 0 5px 14px rgba(70, 140, 200, .28); }
+.tilt[data-c="4"] { border-color: #9a6bd4; background: #f5efff; box-shadow: 0 5px 14px rgba(130, 90, 190, .28); }
+.tilt[data-c="5"] { border-color: #d8a03c; background: #fff7e4; box-shadow: 0 5px 14px rgba(190, 140, 50, .28); }
+.tilt[data-c="6"] { border-color: #4fbcd8; background: #ebfaff; box-shadow: 0 5px 14px rgba(70, 170, 200, .28); }
+.tilt[data-c="7"] { border-color: #ef7a5c; background: #fff0ec; box-shadow: 0 5px 14px rgba(220, 110, 80, .28); }
+.tilt[data-c="8"] { border-color: #6fbf5c; background: #effaf0; box-shadow: 0 5px 14px rgba(90, 170, 70, .28); }
+.tilt[data-c="9"] { border-color: #d46bb4; background: #fbeffb; box-shadow: 0 5px 14px rgba(180, 90, 160, .28); }
+
+.empty { color: #b08a63; font-style: italic; margin-top: 24px; }
+
+/* attachments (v1.4) - layout lives in app.py, theme visuals here */
+.tilt img.preview {
+  border: 1.5px solid #e6c9a3;
+  box-shadow: 0 4px 10px rgba(178, 106, 48, .25);
+}
+.attach-img .dl { color: #fffaf3; background: rgba(90, 50, 20, .82); border: 1.5px solid rgba(232, 151, 90, .6); }
+.attach-img:hover .dl { background: rgba(232, 151, 90, .35); box-shadow: 0 0 10px rgba(232, 151, 90, .5); }
+.tilt a.download { color: #c26a2e; border-bottom: 1.5px solid rgba(194, 106, 46, .5); }
+.tilt a.download:hover { opacity: 1; filter: brightness(.85); }
+/* tilt delete cross (v1.5.4) */
+.tilt .del { color: #fff3ec; background: rgba(90, 50, 20, .82); border: 1.5px solid rgba(220, 90, 60, .55); }
+.tilt .del:hover { color: #fff; background: rgba(200, 70, 45, .38); border-color: #d05a3c; box-shadow: 0 0 10px rgba(200, 70, 45, .5); }
+button#attachBtn { --line: #e8975a; --field: #fffaf3; color: #5a3d2b; }
+/* pending-file clip - warm orange glow (v1.10.2) */
+#pendingChip { color: #e8722f; }
+/* emoji button (v1.5.5) - identical border to the attachment icon */
+button#emojiBtn { --line: #e8975a; --field: #fffaf3; color: #5a3d2b; }

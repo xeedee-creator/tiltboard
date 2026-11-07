@@ -1,0 +1,111 @@
+/* Tiltboard — "neon" style: dark cyberpunk theme with glowing cards */
+
+:root { color-scheme: dark;
+  --tb-ink: #e6f7ff; --tb-accent: #3fd9c4; --tb-muted: rgba(63, 217, 196, .6); } /* v1.15.0: shared header palette */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+  background: radial-gradient(ellipse at top, #1a1033 0%, #0b0817 65%);
+  min-height: 100vh;
+}
+.wrap { max-width: 640px; margin: 0 auto; padding: 8px 16px 64px; }
+
+form.composer { display: flex; gap: 8px; margin-bottom: 28px; }
+textarea#message,
+input#searchInput {  /* v1.14.x: search bar shares the composer text box's look */
+  resize: none;
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 16px;
+  font-family: inherit;
+  color: #e6f7ff;
+  background: #151228;
+  border: 1px solid #3fd9c4;
+  border-radius: 6px;
+  outline: none;
+  overflow-y: hidden;  /* v1.5.10: height grows with content, no scrollbar */
+}
+textarea#message:focus { box-shadow: 0 0 12px rgba(63, 217, 196, .5); }
+span.user { display: inline-block; padding: 1px 8px; margin-right: 6px; border-radius: 4px;
+  background: #1a1636; color: #9ff5e8; border: 1px solid #3fd9c4; font-weight: 700;
+  font-size: .82em; vertical-align: baseline; text-shadow: 0 0 6px rgba(63, 217, 196, .55); }
+form.composer.drop-target textarea#message {
+  border-style: dashed;
+  box-shadow: 0 0 18px rgba(63, 217, 196, .9);
+}
+
+button#post {
+  padding: 10px 22px;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: inherit;
+  letter-spacing: 1px;
+  color: #0b0817;
+  background: linear-gradient(90deg, #3fd9c4, #6a5cff);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: filter .15s ease, transform .1s ease;
+}
+button#post:hover { filter: brightness(1.2) drop-shadow(0 0 8px rgba(63, 217, 196, .6)); }
+button#post:active { transform: scale(.97); }
+
+/* v1.5.2 pagination arrows */
+.pager { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 6px; }
+.arrow { font-size: 34px; line-height: 1; text-decoration: none; color: #3fd9c4; padding: 0; user-select: none; }
+a.arrow:hover { text-shadow: 0 0 14px rgba(63, 217, 196, .9); transform: scale(1.15); transition: transform .1s ease; }
+.arrow.disabled { opacity: .25; cursor: default; }
+.pager-info { font-size: 12px; color: rgba(63, 217, 196, .6); letter-spacing: .08em; text-transform: uppercase; }
+
+/* v1.7.0: row-major grid - --cols is set by JS from this visitor's cookie */
+.board { display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); gap: 18px; justify-items: center; padding-top: 8px; }
+
+.tilt {
+  --tilt: 0deg;
+  width: 100%; max-width: min(420px, 90%); /* v1.7.0: relax inside multi-column grids */
+  transform: rotate(var(--tilt));
+  padding: 16px 20px;
+  border-radius: 6px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: #fff;
+  background-color: #1d1836;
+  border: 1px solid rgba(255, 255, 255, .15);
+  box-shadow: 0 0 14px rgba(0, 0, 0, .5);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tilt[data-c="0"] { border-color: #ffe23f; text-shadow: 0 0 6px #ffe23f88; box-shadow: 0 0 14px #ffe23f55; }
+.tilt[data-c="1"] { border-color: #ff5c9d; text-shadow: 0 0 6px #ff5c9d88; box-shadow: 0 0 14px #ff5c9d55; }
+.tilt[data-c="2"] { border-color: #57ffa3; text-shadow: 0 0 6px #57ffa388; box-shadow: 0 0 14px #57ffa355; }
+.tilt[data-c="3"] { border-color: #4dc9ff; text-shadow: 0 0 6px #4dc9ff88; box-shadow: 0 0 14px #4dc9ff55; }
+.tilt[data-c="4"] { border-color: #c26bff; text-shadow: 0 0 6px #c26bff88; box-shadow: 0 0 14px #c26bff55; }
+.tilt[data-c="5"] { border-color: #ffd93f; text-shadow: 0 0 6px #ffd93f88; box-shadow: 0 0 14px #ffd93f55; }
+.tilt[data-c="6"] { border-color: #7fe3ff; text-shadow: 0 0 6px #7fe3ff88; box-shadow: 0 0 14px #7fe3ff55; }
+.tilt[data-c="7"] { border-color: #ff9e5c; text-shadow: 0 0 6px #ff9e5c88; box-shadow: 0 0 14px #ff9e5c55; }
+.tilt[data-c="8"] { border-color: #7dffb8; text-shadow: 0 0 6px #7dffb888; box-shadow: 0 0 14px #7dffb855; }
+.tilt[data-c="9"] { border-color: #ffab6b; text-shadow: 0 0 6px #ffab6b88; box-shadow: 0 0 14px #ffab6b55; }
+
+.empty { color: #7a739c; font-style: italic; margin-top: 24px; }
+
+/* attachments (v1.4) - layout lives in app.py, theme visuals here */
+.tilt img.preview {
+  border: 1px solid rgba(255, 255, 255, .2);
+  box-shadow: 0 0 10px rgba(63, 217, 196, .35);
+}
+.attach-img .dl { color: #eafffa; background: rgba(13, 10, 26, .8); border: 1px solid rgba(63, 217, 196, .45);
+  text-shadow: 0 0 6px #3fd9c4aa; }
+.attach-img:hover .dl { background: rgba(63, 217, 196, .22); box-shadow: 0 0 10px rgba(63, 217, 196, .5); }
+.tilt a.download { color: #3fd9c4; text-shadow: 0 0 6px #3fd9c488; border-bottom: 1px solid #3fd9c466; }
+.tilt a.download:hover { opacity: 1; filter: drop-shadow(0 0 6px rgba(63, 217, 196, .5)); }
+/* tilt delete cross (v1.5.4) */
+.tilt .del { color: #ff8a7d; background: rgba(13, 10, 26, .8); border: 1px solid rgba(255, 122, 107, .45);
+  text-shadow: 0 0 6px rgba(255, 122, 107, .65); }
+.tilt .del:hover { color: #fff; background: rgba(255, 92, 74, .3); border-color: #ff8a7d;
+  box-shadow: 0 0 10px rgba(255, 92, 74, .55); }
+button#attachBtn { --line: #3fd9c4; --field: #151228; color: #e6f7ff; }
+/* pending-file clip - electric cyan, the glow pops on the dark field (v1.10.2) */
+#pendingChip { color: #6ff7e2; }
+/* emoji button (v1.5.5) - identical border to the attachment icon */
+button#emojiBtn { --line: #3fd9c4; --field: #151228; color: #e6f7ff; }

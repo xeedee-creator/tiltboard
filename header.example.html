@@ -1,0 +1,35 @@
+<!-- ============================================================================
+  Tiltboard — optional page-top header (v1.15.0)
+
+  HOW TO USE
+  1. Copy this file next to app.py and rename it:
+       - "header.html"            -> shown in every theme (uses the active theme's colors)
+       - "header.<style>.html"    -> e.g. header.neon.html, only used when that style
+                                     is the configured default (power-user override)
+  2. Edit freely: text, logo image, links... plain HTML fragments, no <html>/<body> needed.
+  3. Just refresh the browser — the file is read on every page load, NO server restart.
+
+  STYLING HOOKS (defined by each theme in styles/*.css)
+    var(--tb-ink)     main text color of the active theme
+    var(--tb-accent)  accent / highlight color of the active theme
+    var(--tb-muted)   secondary, faded text color
+  Use these instead of hard-coded colors and one header file works in all themes.
+  You may also include your own <style> block below — class names starting with
+  "tb-header" keep it from colliding with the app's CSS.
+
+  If no header*.html file exists, the board renders exactly as before.
+============================================================================= -->
+
+<style>
+  .tb-header { text-align: center; padding: 10px 4px 22px; }
+  .tb-header img { max-height: 56px; margin-bottom: 8px; }
+  .tb-header h1  { font-size: 26px; margin: 0; color: var(--tb-ink); letter-spacing: .03em; }
+  .tb-header p   { margin: 4px 0 0; font-size: 13px; color: var(--tb-muted); }
+  .tb-header h1 span { color: var(--tb-accent); }
+</style>
+
+<div class="tb-header">
+  <!-- <img src="/file/<your-logo>.jpg" alt="logo"> -->
+  <h1>My Home <span>Repository</span></h1>
+  <p>a small tiltboard for the whole network</p>
+</div>

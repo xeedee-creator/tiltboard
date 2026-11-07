@@ -1,0 +1,104 @@
+/* Tiltboard — classic style (the original pastel look) */
+
+:root { color-scheme: light;
+  --tb-ink: #2c3e50; --tb-accent: #4a73b5; --tb-muted: #7a8aa5; } /* v1.15.0: shared header palette */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: linear-gradient(160deg, #f7f9fc 0%, #eef2f8 100%);
+  min-height: 100vh;
+}
+.wrap { max-width: 640px; margin: 0 auto; padding: 8px 16px 64px; }
+
+form.composer { display: flex; gap: 8px; margin-bottom: 28px; }
+textarea#message,
+input#searchInput {  /* v1.14.x: search bar shares the composer text box's look */
+  resize: none;
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 16px;
+  border: 1px solid #c9d3e0;
+  border-radius: 10px;
+  background: #fff;
+  outline: none;
+  overflow-y: hidden;  /* v1.5.10: height grows with content, no scrollbar */
+}
+textarea#message:focus {
+  border-color: #7a9cc6;
+  box-shadow: 0 0 0 3px rgba(122, 156, 198, .2);
+}
+span.user { display: inline-block; padding: 1px 8px; margin-right: 6px; border-radius: 8px;
+  background: #eaf1f9; color: #34506e; border: 1px solid #7a9cc6; font-weight: 600;
+  font-size: .82em; vertical-align: baseline; }
+form.composer.drop-target textarea#message { border-style: dashed; background: #eef4fb; }
+
+button#post {
+  padding: 10px 22px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: #4a73b5;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .15s ease, transform .1s ease;
+}
+button#post:hover { background: #3c62a0; }
+button#post:active { transform: scale(.97); }
+
+/* v1.5.2 pagination arrows */
+.pager { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 6px; }
+.arrow { font-size: 34px; line-height: 1; text-decoration: none; color: #5a7cb8; padding: 0; user-select: none; }
+a.arrow:hover { background: rgba(122, 156, 198, .18); border-radius: 8px; transform: scale(1.12); transition: transform .1s ease; }
+.arrow.disabled { opacity: .3; cursor: default; }
+.pager-info { font-size: 12px; color: #7a8aa5; letter-spacing: .04em; }
+
+/* v1.7.0: row-major grid - --cols is set by JS from this visitor's cookie */
+.board { display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); gap: 18px; justify-items: center; padding-top: 8px; }
+
+.tilt {
+  --tilt: 0deg;
+  width: 100%; max-width: min(420px, 90%); /* v1.7.0: relax inside multi-column grids */
+  transform: rotate(var(--tilt));
+  padding: 16px 20px;
+  border-radius: 12px;
+  font-size: 17px;
+  line-height: 1.5;
+  box-shadow: 3px 4px 10px rgba(40, 50, 80, .18);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tilt[data-c="0"] { background: #FFE8A3; }
+.tilt[data-c="1"] { background: #B5EAD7; }
+.tilt[data-c="2"] { background: #C7CEEA; }
+.tilt[data-c="3"] { background: #FFC8DD; }
+.tilt[data-c="4"] { background: #FFF1BA; }
+.tilt[data-c="5"] { background: #D4F0F0; }
+.tilt[data-c="6"] { background: #E2ECE9; }
+.tilt[data-c="7"] { background: #F6BDDB; }
+.tilt[data-c="8"] { background: #DEE2FF; }
+.tilt[data-c="9"] { background: #FDDEB8; }
+
+.empty { color: #9aa7b8; font-style: italic; margin-top: 24px; }
+
+/* attachments (v1.4) - layout lives in app.py, theme visuals here */
+.tilt img.preview {
+  background: #fff;
+  border: 1px solid rgba(60, 80, 120, .25);
+  box-shadow: 2px 3px 8px rgba(40, 50, 80, .2);
+}
+.attach-img .dl { color: #3c62a0; background: #fffefb; border: 1px solid rgba(122, 156, 198, .55);
+  box-shadow: 2px 3px 8px rgba(40, 50, 80, .2); }
+.attach-img:hover .dl { background: #eef3fb; color: #2c4d86; border-color: #7a9cc6; }
+.tilt a.download { color: #3c62a0; font-weight: 600; border-bottom: 1px dashed #7a9cc6; }
+.tilt a.download:hover { opacity: 1; border-bottom-style: solid; }
+/* tilt delete cross (v1.5.4) */
+.tilt .del { color: #8c3f2f; background: rgba(255, 255, 255, .8); border: 1px solid rgba(140, 63, 47, .35);
+  box-shadow: 0 1px 4px rgba(40, 50, 80, .25); }
+.tilt .del:hover { color: #fff; background: #c2503f; }
+button#attachBtn { --line: #c9d3e0; --field: #fff; color: #4a73b5; }
+/* pending-file clip - vivid blue, glows on hover (v1.10.2) */
+#pendingChip { color: #2f5fb3; }
+/* emoji button (v1.5.5) - identical border to the attachment icon */
+button#emojiBtn { --line: #c9d3e0; --field: #fff; color: #4a73b5; }
