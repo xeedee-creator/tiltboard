@@ -107,6 +107,6 @@ a.arrow:hover { color: #c7d2ff; transform: scale(1.15); transition: transform .1
 .tilt .del:hover { color: #fff; background: rgba(255, 92, 74, .35); box-shadow: 0 6px 16px rgba(255, 92, 74, .55); }
 button#attachBtn { --line: #4a5aa8; --field: #10173a; color: #e8edff; }
 /* pending-file clip - soft blue glow on the night field (v1.10.2) */
-#pendingChip { color: #9db4ff; }
+.chip { color: #9db4ff; }
 /* emoji button (v1.5.5) - identical border to the attachment icon */
 button#emojiBtn { --line: #4a5aa8; --field: #10173a; color: #e8edff; }

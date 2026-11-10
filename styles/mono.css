@@ -105,6 +105,6 @@ a.arrow:hover { transform: scale(1.15); transition: transform .1s ease; }
 .tilt .del:hover { background: #c0392b; box-shadow: 4px 4px 0 rgba(17, 17, 17, .5); }
 button#attachBtn { --line: #111; --field: #fff; color: #111; }
 /* pending-file clip - pure black, the glow is a soft grey halo (v1.10.2) */
-#pendingChip { color: #000; }
+.chip { color: #000; }
 /* emoji button (v1.5.5) - identical border to the attachment icon */
 button#emojiBtn { --line: #111; --field: #fff; color: #111; }

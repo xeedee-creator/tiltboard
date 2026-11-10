@@ -1,0 +1,114 @@
+/* Tiltboard — "floating" style: professional light theme, cards floating on a calm background */
+
+:root { color-scheme: light;
+  --tb-ink: #1f2937; --tb-accent: #2563eb; --tb-muted: rgba(37, 99, 235, .6); } /* v1.15.0: shared header palette */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: linear-gradient(180deg, #d9e0ec 0%, #c2cee0 60%, #a7b8cf 100%);
+  min-height: 100vh;
+}
+.wrap { max-width: 640px; margin: 0 auto; padding: 8px 16px 64px; }
+
+form.composer { display: flex; gap: 8px; margin-bottom: 28px; }
+textarea#message,
+input#searchInput {  /* v1.14.x: search bar shares the composer text box's look */
+  resize: none;
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 16px;
+  font-family: inherit;
+  color: #1f2937;
+  background: #ffffff;
+  border: 1px solid #c8d2e4;
+  border-radius: 10px;
+  outline: none;
+  overflow-y: hidden;  /* v1.5.10: height grows with content, no scrollbar */
+}
+textarea#message:focus { box-shadow: 0 4px 18px rgba(37, 99, 235, .18); border-color: #2563eb; }
+span.user { display: inline-block; padding: 1px 8px; margin-right: 6px; border-radius: 999px;
+  background: #eef2fa; color: #1d4ed8; border: 1px solid #c5d3f0; font-weight: 700;
+  font-size: .82em; vertical-align: baseline; text-shadow: none; }
+form.composer.drop-target textarea#message {
+  border-style: dashed;
+  box-shadow: 0 4px 18px rgba(37, 99, 235, .3);
+}
+
+button#post {
+  padding: 10px 22px;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: inherit;
+  letter-spacing: 1px;
+  color: #ffffff;
+  background: linear-gradient(90deg, #2563eb, #4f8ef7);
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, .35);
+  transition: filter .15s ease, transform .1s ease;
+}
+button#post:hover { filter: brightness(1.08) drop-shadow(0 6px 16px rgba(37, 99, 235, .4)); }
+button#post:active { transform: scale(.97); }
+
+/* v1.5.2 pagination arrows */
+.pager { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 6px; }
+.arrow { font-size: 34px; line-height: 1; text-decoration: none; color: #2563eb; padding: 0; user-select: none; }
+a.arrow:hover { filter: drop-shadow(0 4px 8px rgba(37, 99, 235, .4)); transform: scale(1.1); transition: transform .1s ease; color: #1d4ed8; }
+.arrow.disabled { opacity: .25; cursor: default; }
+.pager-info { font-size: 12px; color: rgba(37, 99, 235, .6); letter-spacing: .08em; text-transform: uppercase; }
+
+/* v1.7.0: row-major grid - --cols is set by JS from this visitor's cookie */
+.board { display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); gap: 22px; justify-items: center; padding-top: 8px; }
+
+.tilt {
+  --tilt: 0deg;
+  width: 100%; max-width: min(420px, 90%); /* v1.7.0: relax inside multi-column grids */
+  transform: rotate(calc(var(--tilt) * .2)); /* professional: almost straight, a hint of life */
+  padding: 18px 22px;
+  border-radius: 14px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: #1f2937;
+  background-color: #ffffff;
+  border: 1px solid rgba(160, 174, 208, .4);
+  box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* keep the v1.8.0 hover zoom, with a soft lift instead of extra tilt */
+#board .tilt:hover, #board .tilt:focus-within { transform: rotate(calc(var(--tilt) * .2)) scale(1.03); z-index: 3;
+  box-shadow: 0 5px 12px rgba(15, 23, 42, .16), 0 34px 72px rgba(15, 23, 42, .4); }
+
+.tilt[data-c="0"] { border-top: 3px solid #f59e0b; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+.tilt[data-c="1"] { border-top: 3px solid #ec4899; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+.tilt[data-c="2"] { border-top: 3px solid #10b981; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+.tilt[data-c="3"] { border-top: 3px solid #3b82f6; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+.tilt[data-c="4"] { border-top: 3px solid #8b5cf6; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+.tilt[data-c="5"] { border-top: 3px solid #eab308; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+.tilt[data-c="6"] { border-top: 3px solid #0ea5e9; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+.tilt[data-c="7"] { border-top: 3px solid #f97316; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+.tilt[data-c="8"] { border-top: 3px solid #14b8a6; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+.tilt[data-c="9"] { border-top: 3px solid #f59e0b; box-shadow: 0 3px 8px rgba(15, 23, 42, .18), 0 26px 56px rgba(15, 23, 42, .32); }
+
+.empty { color: #8a97ad; font-style: italic; margin-top: 24px; }
+
+/* attachments (v1.4) - layout lives in app.py, theme visuals here */
+.tilt img.preview {
+  border: 1px solid rgba(160, 174, 208, .5);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, .3);
+}
+.attach-img .dl { color: #ffffff; background: rgba(31, 41, 55, .72); border: 1px solid rgba(255, 255, 255, .3); }
+.attach-img:hover .dl { background: rgba(37, 99, 235, .85); box-shadow: 0 4px 12px rgba(37, 99, 235, .4); }
+.tilt a.download { color: #2563eb; text-decoration: underline dotted; border-bottom: 1px solid rgba(37, 99, 235, .4); }
+.tilt a.download:hover { opacity: 1; filter: drop-shadow(0 4px 8px rgba(37, 99, 235, .3)); color: #1d4ed8; }
+/* tilt delete cross (v1.5.4) */
+.tilt .del { color: #ef4444; background: rgba(255, 255, 255, .9); border: 1px solid rgba(239, 68, 68, .4); }
+.tilt .del:hover { color: #ffffff; background: #ef4444; border-color: #ef4444;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, .45); }
+button#attachBtn { --line: #c8d2e4; --field: #ffffff; color: #1f2937; }
+/* pending-file clip - calm blue on the white field */
+.chip { color: #2563eb; }
+/* emoji button (v1.5.5) - identical border to the attachment icon */
+button#emojiBtn { --line: #c8d2e4; --field: #ffffff; color: #1f2937; }

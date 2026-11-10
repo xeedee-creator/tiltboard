@@ -112,6 +112,6 @@ a.arrow:hover { text-shadow: 0 0 14px rgba(61, 255, 157, .95); transform: scale(
 .tilt .del:hover { color: #fff; background: rgba(255, 92, 74, .3); box-shadow: 0 0 10px rgba(255, 92, 74, .6); }
 button#attachBtn { --line: #1f7a44; --field: #081710; color: #5dff9d; }
 /* pending-file clip - phosphor green, the classic CRT glow (v1.10.2) */
-#pendingChip { color: #5dff9d; }
+.chip { color: #5dff9d; }
 /* emoji button (v1.5.5) - identical border to the attachment icon */
 button#emojiBtn { --line: #1f7a44; --field: #081710; color: #5dff9d; }

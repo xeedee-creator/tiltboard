@@ -66,7 +66,7 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "1.16.0"
+VERSION = "1.18.2"
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
 NUM_COLORS = 10  # each stylesheet defines its own palette for data-c="0..9"
@@ -413,21 +413,18 @@ PAGE = r"""<!DOCTYPE html>
 <div class="wrap">
 __HEADER__
 __ARROWS_TOP__
-  <form class="composer" method="post" action="/post" enctype="multipart/form-data">
+    <form class="composer" method="post" action="/post" enctype="multipart/form-data">
     <div class="msg-wrap">
       <textarea id="message" name="message" rows="1" placeholder="Say something... (paste or drop files)" autofocus></textarea>
       <div id="uploadProg" class="hidden"><div id="uploadFill"></div><span id="uploadLabel"></span></div>
-      <span id="pendingChip" class="hidden" title="">
-        <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="currentColor" d="M16.5 6v11.5a4 4 0 0 1-8 0V5a2.5 2.5 0 0 1 5 0v10.5a1 1 0 0 1-2 0V6H10v9.5a2.5 2.5 0 0 0 5 0V5a4 4 0 0 0-8 0v12.5a5.5 5.5 0 0 0 11 0V6h-1.5z"/></svg>
-      </span>
-      <button type="button" id="chipRemove" class="hidden" title="Remove attachment">&#10005;</button>
+      <div id="pendingChips"></div>  <!-- v1.19.x: chips live INSIDE the box, top-right corner -->
     </div>
     <div id="emojiPicker" class="hidden"></div>
     <button id="emojiBtn" type="button" title="Add an emoji">&#128578;</button>
     <button id="attachBtn" type="button" title="Attach a file">&#128206;</button>
-    <input id="filePick" type="file" hidden>
-    <button id="post" type="submit">Post</button>
-  </form>
+      <input id="filePick" type="file" multiple hidden>
+      <button id="post" type="submit">Post</button>
+    </form>
 
   <div class="board" id="board">
 __POSTS__
@@ -483,7 +480,7 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
   const saved = readCookie();
   const name = (saved && saved.get("name")) || DEFAULT_NAME;
   const style = (saved && saved.get("style")) || window.DEFAULT_STYLE;
-  const cols = cleanGrid(saved && saved.get("cols"), window.DEFAULT_COLUMNS, 100);
+  let cols = cleanGrid(saved && saved.get("cols"), window.DEFAULT_COLUMNS, 100); // v1.17.0: mobile first-visit default may lower this
   const rows = cleanGrid(saved && saved.get("rows"), window.DEFAULT_ROWS, 1000);
 
   if (saved) {  // remember this visitor's theme - no server round-trip needed
@@ -535,10 +532,15 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
   document.querySelector("form").addEventListener("submit", () => {
     const msg = document.getElementById("message");
     const t = msg.value.trim();
-    if (name !== DEFAULT_NAME && (t || pendingFile)) msg.value = t ? name + ": " + msg.value : name + ":";
+    // v1.18.0: prefixing moved into the submit loop below - one attempt posts N files, so it must happen once per file, not once per submit event
   });
 
   if (!saved) {  // first visit: show the settings box so choices can be made
+    // v1.17.0: a phone gets one column by default - full-width cards stacked
+    // vertically, because several columns per line would be too small to read on a
+    // narrow screen. Existing visitors are untouched (saved != null), and this
+    // prefills the open box only; nothing is written until the user closes it or presses Enter.
+    if (window.matchMedia("(max-width: 700px)").matches) cols = 1;
     nameInput.value = name;       // prefill like the icon-open path does - the box is
     colsInput.value = cols;       // shown without a click, so its inputs would stay empty
     rowsInput.value = rows;       // (the style dropdown prefills itself once /styles lands)
@@ -546,15 +548,17 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
     box.setAttribute("aria-hidden", "false");
   }
 
-  // Attachments: a pending file is kept in memory until posted (FormData).
+  // Attachments (v1.18.0): any number of files wait as chips in the composer
+  // row, each remembered with the source it came from - a batch may mix
+  // dropped pictures, pasted ones and paperclip picks freely.
   const form = document.querySelector(".composer");
   const message = document.getElementById("message");
-  const chip = document.getElementById("pendingChip");
-  const chipRemove = document.getElementById("chipRemove");
+  const chipsRow = document.getElementById("pendingChips");
   const pick = document.getElementById("filePick");
-  let pendingFile = null, pendingSource = "clip";   // v1.16.2: where the file came from (drop/paste/clip)
-  const DROP_MAX = 256 * 1024 * 1024;     // v1.16.2: drops/pastes stay on the direct path up to this, then suggest the clip icon
+  let pendingFiles = [];                  // v1.18.0: { file, source } - posting order is array order
+  const DROP_MAX = 256 * 1024 * 1024;     // drops/pastes stay on the direct path up to this, then suggest the clip icon
   const CHUNK_SIZE = 8 * 1024 * 1024;     // slice size for chunked uploads (paperclip always chunks)
+  const CLIP_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
 
   // v1.16.x: progress overlay over the text box - fill grows with uploaded bytes,
   // label on the left edge shows "filename - x / y MB" (same rounding as alerts)
@@ -573,29 +577,47 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
   }
   function hideUpload() { upProg.classList.add("hidden"); }
 
-  function showPending(f) {
-    pendingFile = f || null;
-    if (f) {                                    // v1.10.2: SVG clip inherits the theme color; pop-in animation replays on every attach
-      chip.title = f.name;
-      chip.classList.remove("hidden");
-      void chip.offsetWidth;                    // restart @keyframes chipPop so each new file gets the attention flash
-      chipRemove.classList.remove("hidden");    // tiny ✕ fades in beside it (CSS sibling rule); clicking removes without posting
-    }
-    else { chip.title = ""; chip.classList.add("hidden"); chipRemove.classList.add("hidden"); }  // v1.10.1: icon only, name on hover
+  function renderChips() {   // v1.19.x: first attachment sits in the box's top-right corner, later ones to its left
+    chipsRow.replaceChildren(...pendingFiles.map((p, idx) => {
+      const span = document.createElement("span");
+      span.className = "chip";                  // v1.10.2 look kept: clip inherits the theme color via currentColor
+      span.title = p.file.name;                 // name appears on hover only
+      span.innerHTML = CLIP_SVG;
+      const x = document.createElement("button");  // tiny ✕ fades in beside its own chip (CSS sibling rule)
+      x.className = "chip-x"; x.type = "button";
+      x.title = "Remove this attachment"; x.textContent = "\u2715";
+      x.addEventListener("click", (e) => {
+        e.preventDefault();
+        pendingFiles.splice(idx, 1);            // v1.18.0: each chip removes exactly its own file
+        pick.value = "";
+        renderChips(); message.focus();
+      });
+      span.appendChild(x);
+      return span;
+    }));
+    fitChips();
   }
 
-  chipRemove.addEventListener("click", (e) => { e.preventDefault(); pick.value = ""; showPending(null); message.focus(); });
+  const fitChips = () => {  // v1.19.x: wrapped chip rows live INSIDE the box - grow it until every chip + one text line show
+    message.style.height = "auto";                  // (offsetHeight is zero while empty, so the guard falls back to the typed-text height)
+    message.style.height = Math.max(message.scrollHeight,
+                                    chipsRow.children.length ? chipsRow.offsetHeight + 24 : 0) + "px";
+  };
+
+  function addPending(list, source) {   // a batch of files from one gesture (drop / paste / clip)
+    for (const f of list) {
+      if (!f || !f.name) continue;      // empty clipboard slots have no name - skip them quietly
+      pendingFiles.push({ file: f, source });
+    }
+    renderChips();
+  }
 
   document.getElementById("attachBtn").addEventListener("click", () => pick.click());
-  pick.addEventListener("change", () => { pendingSource = "clip"; showPending(pick.files[0] || null); });
-  message.addEventListener("paste", (e) => {  // pasted pictures/files -> attachment
-    const items = [...(e.clipboardData && e.clipboardData.items || [])];
-    for (const item of items) if (item.kind === "file") {
-      pendingSource = "paste";
-      showPending(item.getAsFile());
-      e.preventDefault();
-      return;
-    }
+  pick.addEventListener("change", () => { addPending([...pick.files], "clip"); pick.value = ""; });
+  message.addEventListener("paste", (e) => {  // pasted pictures/files -> attachments (all of them, v1.18.0)
+    const files = [...(e.clipboardData && e.clipboardData.items || [])]
+      .filter((it) => it.kind === "file").map((it) => it.getAsFile()).filter(Boolean);
+    if (files.length) { addPending(files, "paste"); e.preventDefault(); }
   });
 
   // Pasted text arrives exactly as copied: multi-line content keeps its real line
@@ -615,13 +637,20 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
   const escapeWord = (word) => {  // a backslash in pasted text cannot start an escape
     return word.includes("\\") ? "\\\\" + word : word;  // doubled -> renders as one literal backslash
   };
-  const normalizeTags = (s) => {  // <b>/<i>/<u> pairs -> stacked per-word prefixes, written order
+  const normalizeTags = (s) => {  // <b>/<i>/<u> pairs -> stacked per-word prefixes, written order; v1.19.x: <s>/<strike>/<del> -> ~~span~~
     let out = "", stack = [], m;
-    while ((m = s.match(/^(.*?)(?:<\/(b|i|u)>|<(b|i|u)>)/is))) {
+    while ((m = s.match(/^(.*?)(?:<\/(b|i|u|s|strike|del)>|<(b|i|u|s|strike|del)>)/is))) {
       const plainPart = processPlain(m[1]);  // segment before the tag
-      if (m[2]) stack.pop();                 // closing: prefixes shrink with it
-      else if (!stack.includes(m[3])) stack.push(m[3]);  // opening, duplicates ignored like format_text()
-      out += plainPart;
+      const name = (m[2] || m[3]).toLowerCase();   // strike/del normalise to s
+      if (m[2]) {                              // closing: prefixes shrink with it
+        const removed = stack.pop();
+        out += plainPart + ((/^(s|strike|del)$/.test(removed || "")) ? "~~" : "");  // v1.19.x: close the strikethrough span only if we opened one
+      } else {                                 // opening, duplicates ignored like format_text()
+        if (!stack.includes(name)) {
+          stack.push(name);
+          out += plainPart + ((/^(s|strike|del)$/.test(name)) ? "~~" : "");  // v1.19.x: open the strikethrough span
+        } else out += plainPart;
+      }
       s = s.slice(m[0].length);
     }
     return out + processPlain(s);
@@ -632,7 +661,10 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
         const w = text.match(wordRe);
         if (!w) { res += escapeWord(text); break; }  // stray '<' is not a tag - stays literal
         // v1.5.8 fix: only prefix words inside an open <b>/<i>/<u> tag; plain pasted text passes through untouched
-        res += /^\s/.test(w[1]) || !stack.length ? w[1] : "\\" + stack.join("") + escapeWord(w[1]);
+        // v1.19.x: while a strikethrough span is open, words stay bare (they live inside ~~...~~, which renders literal)
+        res += /^\s/.test(w[1]) || !stack.length ? w[1]
+             : stack.some((t) => /^(s|strike|del)$/.test(t)) ? w[1]   // v1.19.x: inside an open ~~ span words stay bare (renders literal)
+             : "\\" + stack.join("") + escapeWord(w[1]);
         text = w[2];
       }
       return res;
@@ -664,70 +696,89 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
   form.addEventListener("drop", (e) => {
     e.preventDefault();
     form.classList.remove("drop-target");
-    const f = e.dataTransfer && e.dataTransfer.files[0];
-    if (f) { pendingSource = "drop"; showPending(f); }
+    addPending([...(e.dataTransfer ? e.dataTransfer.files : [])], "drop");   // v1.18.0: every dropped file becomes its own chip
   });
 
   form.addEventListener("submit", (e) => {
     const msg = document.getElementById("message");
-    if (!msg.value.trim() && !pendingFile) { e.preventDefault(); return; }
+    if (!msg.value.trim() && !pendingFiles.length) { e.preventDefault(); return; }
     e.preventDefault();                     // v1.16.2: drops/pastes stay direct up to DROP_MAX, the paperclip always chunks
-    const file = pendingFile;
+    const files = pendingFiles.slice();     // v1.18.0: posting order - file 0 carries the text, each later one gets its own tilt
     const text = msg.value.trim();
-    const source = pendingSource || "clip";  // v1.16.2: where the file came from decides the upload path
-    if (!file) {                            // v1.16.x: a plain text post never touches the upload paths
+    if (!files.length) {                    // v1.16.x: a plain text post never touches the upload paths
       const fd = new FormData(form);
-      fd.set("message", text);
+      // Regression fix (v1.20.0): since v1.18.0 the name prefix lives in lineFor(), but that only runs on the file path -
+      // this early return bypassed it, so a cookie name never reached chat.txt for plain-text posts again.
+      // Same rule as lineFor(0); called directly here because lineFor() is TDZ-unreachable from inside its own callback scope.
+      fd.set("message", name === DEFAULT_NAME ? text : name + ": " + text);
       fetch("/post", { method: "POST", body: fd }).then((r) => location.reload()).catch(fail);
       return;
     }
-    function fail(detail) { hideUpload(); showPending(file); pick.value = ""; msg.value = text; alert("Upload failed - your post was restored." + (detail ? "\n(" + detail + ")" : "")); }
-    if (source !== "clip" && file.size > DROP_MAX) {  // v1.16.2: oversized drop/paste -> suggest the clip icon, keep everything untouched
-      msg.value = text;
-      alert(file.name + " is over 256 MB - too big for a direct drop.\nPlease attach it with the paperclip icon instead (it uploads in pieces).");
-      e.preventDefault(); return;
+    // v1.18.0 pre-flight: one oversized drop/paste aborts the whole batch BEFORE anything is posted -
+    // nothing half-done, every chip stays untouched while the user re-attaches via the paperclip.
+    const tooBig = files.filter((p) => p.source !== "clip" && p.file.size > DROP_MAX);
+    if (tooBig.length) {
+      alert(tooBig.map((p) => p.file.name).join("\n") +
+            " - over 256 MB, too big for a direct drop.\nPlease attach it with the paperclip icon instead (it uploads in pieces).\nNothing was posted.");
+      return;
     }
-    // The pending file is appended to the multipart body (it has no form control
-    // of its own). Input + chip are cleared right away so a second submit event
-    // on the same attempt cannot re-prefix or double-post.
-    pendingFile = null; showPending(null); pick.value = "";
+    function fail(detail, idx) { hideUpload(); pendingFiles.splice(0, idx); renderChips(); pick.value = ""; msg.value = text; alert("Upload failed - your post was restored." + (detail ? "\n(" + detail + ")" : "") + (idx > 1 ? "\nThe first " + (idx - 1) + " file(s) were already posted." : "")); }
+    const label = () => files.length > 1 ? " (file " + postIdx + " of " + files.length + ")" : "";
+    let postIdx = 0;
+    // v1.18.0: the name prefix is applied here, per file - once at attempt start, so a second submit event on
+    // this same batch can never re-prefix (the old listener now only guards plain-text posts).
+    const lineFor = (i) => {  // chat.txt keeps the "user: text" shape; extra files get the bare prefix when one exists
+      if (name === DEFAULT_NAME) return i === 0 ? text : "";
+      return i === 0 ? name + ": " + text : name + ":";
+    };
+    // The batch is posted sequentially, one file at a time - each post reuses the
+    // battle-tested single-file paths verbatim (direct multipart or chunked), so
+    // nothing upload-side had to be re-invented. Input + chips are cleared right away.
+    pendingFiles = []; renderChips(); pick.value = "";
     msg.value = "";
-    if (source === "clip") {                // v1.16.2: paperclip always chunks - retry-safe for any size
-      let stored = null;                    // kept in outer scope so the catch below can abort it by name
-      const postJson = (path, payload) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then((r) => r.json());
-      // v1.16.1: one flaky request no longer kills the whole transfer - every step
-      // is retried (3 tries, 2 s / 4 s apart); chunk data never changes on retry.
-      const withRetry = async (label, task) => {
-        for (let attempt = 1; ; attempt++) {
-          try { return await task(); }
-          catch (err) { if (attempt > 3) throw new Error(label + " failed after 4 tries: " + err.message); await new Promise((w) => setTimeout(w, 2000 * attempt)); }
-        }
-      };
-      withRetry("upload/init", () => postJson("/upload/init", { name: file.name || "pasted" }))
-        .then(async (res) => {
-          if (!res.ok || !res.stored) throw new Error(res.error || "could not reserve a file name");
-          stored = res.stored;
-          showUpload(file.name || "pasted", 0, file.size);   // v1.16.x: overlay appears as soon as the transfer starts
-          for (let off = 0; off < file.size; off += CHUNK_SIZE) {   // ~8 MB slices; the server streams each one to disk in 1 MB reads
-            await withRetry("chunk " + Math.round(off / CHUNK_SIZE + 1), () =>
-              fetch("/upload/chunk", { method: "POST", headers: { "X-Stored-Name": stored, "X-Chunk-Offset": String(off) }, body: file.slice(off, Math.min(off + CHUNK_SIZE, file.size)) })
-                .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); }));
-            showUpload(file.name || "pasted", off + CHUNK_SIZE, file.size);   // v1.16.x: advance the bar after each successful slice
-          }
-          return withRetry("commit", () => postJson("/post", { message: text, attach_stored: stored }));  // commit = same line format as a normal attachment post
-        })
-        .then((r) => location.reload())
-        .catch((err) => {
-          fail(err && err.message);         // best-effort cleanup of the partial file (fire and forget)
-          if (!stored) return;
-          fetch("/upload/abort", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stored: stored }) }).catch(function () {});
-        });
-    } else {
-      const fd = new FormData(form);
-      fd.set("message", text);
+    const postJson = (path, payload) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }).then((r) => r.json());
+    // v1.16.1: one flaky request no longer kills the whole transfer - every step
+    // is retried (3 tries, 2 s / 4 s apart); chunk data never changes on retry.
+    const withRetry = async (lbl, task) => {
+      for (let attempt = 1; ; attempt++) {
+        try { return await task(); }
+        catch (err) { if (attempt > 3) throw new Error(lbl + " failed after 4 tries: " + err.message); await new Promise((w) => setTimeout(w, 2000 * attempt)); }
+      }
+    };
+    const sendFile = (i, file, source, line) => {
+      if (source === "clip") {              // v1.16.2: paperclip always chunks - retry-safe for any size
+        let stored = null;                  // kept in outer scope so the catch below can abort it by name
+        return withRetry("upload/init", () => postJson("/upload/init", { name: file.name || "pasted" }))
+          .then(async (res) => {
+            if (!res.ok || !res.stored) throw new Error(res.error || "could not reserve a file name");
+            stored = res.stored;
+            showUpload(file.name + label(), 0, file.size);   // v1.16.x: overlay appears as soon as the transfer starts
+            for (let off = 0; off < file.size; off += CHUNK_SIZE) {   // ~8 MB slices; the server streams each one to disk in 1 MB reads
+              await withRetry("chunk " + Math.round(off / CHUNK_SIZE + 1), () =>
+                fetch("/upload/chunk", { method: "POST", headers: { "X-Stored-Name": stored, "X-Chunk-Offset": String(off) }, body: file.slice(off, Math.min(off + CHUNK_SIZE, file.size)) })
+                  .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); }));
+              showUpload(file.name + label(), off + CHUNK_SIZE, file.size);   // v1.16.x: advance the bar after each successful slice
+            }
+            return withRetry("commit", () => postJson("/post", { message: line, attach_stored: stored }));  // commit = same line format as a normal attachment post
+          })
+          .catch((err) => {
+            if (stored) fetch("/upload/abort", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stored: stored }) }).catch(function () {});  // best-effort cleanup of the partial file
+            throw err;
+          });
+      }
+      const fd = new FormData();             // v1.16.x direct path - one attachment per post, exactly as before
+      fd.set("message", line);
       fd.append("attachment", file, file.name || "pasted");
-      fetch("/post", { method: "POST", body: fd }).then((r) => location.reload()).catch(fail);
-    }
+      return fetch("/post", { method: "POST", body: fd });
+    };
+    const runBatch = (i) => {
+      postIdx = i + 1;                        // v1.18.0: the overlay counter knows which file of the batch is uploading
+      if (i >= files.length) { location.reload(); return; }
+      sendFile(i, files[i].file, files[i].source, lineFor(i))
+        .then(() => runBatch(i + 1))          // v1.18.0: each extra file is its own tilt - posted one after another
+        .catch((err) => fail(err && err.message, i));
+    };
+    runBatch(0);
   });
 })();
 </script>
@@ -737,6 +788,85 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
 (function () {
   const board = document.getElementById("board");
   let lastSig = "";
+
+  // v1.19.1: shared escape walk - lockstep with _fmt_loop()/format_text() on the server.
+  // DOM-safe by construction (element + text nodes only, no innerHTML). depth limits ~~
+  // nesting to one level; any further paired ~~ stays literal. `stop` bounds a span's
+  // content walk to its own closing pair - v1.19.1 fix: without it the recursive call ran
+  // past the closer and rendered it as an unmatched literal ~~.
+  function fmtWalk(text, i, parent, depth, stop) {
+    const n = (stop === undefined ? text.length : Math.min(stop, text.length));
+    while (i < n) {
+      const ch = text[i];
+      if (ch === "\\" && "nubi".includes(text[i + 1] || "")) {
+        const esc = text[++i];
+        if (esc === "n") { parent.appendChild(document.createElement("br")); i++; continue; }
+        // v1.5.8: stacked escapes - every chained \b/\u/\i prefix applies to the same word;
+        // opens in written order, closes in reverse.
+        const fmts = [esc];
+        let j = i + 1;
+        while (j < text.length && text[j] === "\\"
+               && "bui".includes(text[j + 1] || "")) {
+          if (!fmts.includes(text[j + 1])) fmts.push(text[j + 1]);
+          j += 2;
+        }
+        let k = j;  // v1.7.1: a token ends where any recognized escape starts or at ~ - lockstep
+        while (k < text.length && !/\s/.test(text[k]) && text[k] !== "~"
+               && !(text[k] === "\\" && "nubi".includes(text[k + 1] || ""))) k++;
+        if (k > j) {
+          // v1.5.8 fix: nest the tags around the word - lockstep with format_text()
+          let cur = parent;
+          for (const t of fmts) { const el = document.createElement(t); cur.appendChild(el); cur = el; }
+          cur.appendChild(document.createTextNode(text.slice(j, k)));  // text nodes only: no injection
+          i = k;
+        } else if (text.startsWith("~~", j)) {
+          // v1.19.1: no word after the escapes, but a ~~span~~ follows - stacked prefixes wrap
+          // its whole content; recurse into the span (depth-limited).
+          const end = text.indexOf("~~", j + 2);
+          if (end !== -1 && depth < 2) {
+            let cur = parent;
+            for (const t of fmts) { const el = document.createElement(t); cur.appendChild(el); cur = el; }
+            const sEl = document.createElement("s");
+            cur.appendChild(sEl);
+            fmtWalk(text, j + 2, sEl, depth + 1, end);   // v1.19.1: bounded by the closing pair
+            i = end + 2;
+          } else { parent.appendChild(document.createTextNode(text.slice(i - 1, j))); i = j; }
+        } else {
+          // no word after the escapes (and no ~~span right behind) - keep them literal
+          parent.appendChild(document.createTextNode(text.slice(i - 1, j)));
+          i = j;
+        }
+      } else if (ch === "`") {
+        const end = text.indexOf("`", i + 1);
+        if (end !== -1) {
+          const el = document.createElement("code");
+          // v1.5.9: \n still breaks lines inside code spans; all else literal.
+          let buf = "";
+          for (let t = i + 1; t < end;) {
+            if (text[t] === "\\" && text[t + 1] === "n") {
+              if (buf) { el.appendChild(document.createTextNode(buf)); buf = ""; }
+              el.appendChild(document.createElement("br"));
+              t += 2;
+            } else { buf += text[t]; t++; }
+          }
+          if (buf) el.appendChild(document.createTextNode(buf));
+          parent.appendChild(el);
+          i = end + 1;
+        } else { parent.appendChild(document.createTextNode(ch)); i++; }
+      } else if (text.startsWith("~~", i)) {
+        // v1.19.0: ~~text~~ strikethrough - lockstep with format_text();
+        // v1.19.1: escapes work inside the span too, nested pairs stay literal.
+        const end = text.indexOf("~~", i + 2);
+        if (end !== -1 && depth < 2) {
+          const el = document.createElement("s");
+          parent.appendChild(el);
+          fmtWalk(text, i + 2, el, depth + 1, end);   // v1.19.1: bounded by the closing pair
+          i = end + 2;
+        } else { parent.appendChild(document.createTextNode("~~")); i += 2; }  // unmatched ~~ stays literal
+      } else if (ch === "\n") { parent.appendChild(document.createElement("br")); i++; }
+      else { parent.appendChild(document.createTextNode(ch)); i++; }  // text nodes only: no injection
+    }
+  }
 
   function render(posts) {  // newest first, as returned by /posts
     if (!posts.length) {
@@ -759,51 +889,7 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
       let i = nm ? nm[0].length : 0;  // same escape set as format_text(), DOM-safe by construction
       if (nm) { const u = document.createElement("span"); u.className = "user";
                 u.textContent = nm[1]; span.appendChild(u); }
-      while (i < post.text.length) {
-        const ch = post.text[i];
-        if (ch === "\\" && "nubi".includes(post.text[i + 1] || "")) {
-          const esc = post.text[++i];
-          if (esc === "n") { span.appendChild(document.createElement("br")); i++; continue; }
-          // v1.5.8: stacked escapes - every chained \b/\u/\i prefix applies to the same word;
-          // opens in written order, closes in reverse. Lockstep with format_text().
-          const fmts = [esc];
-          let j = i + 1;
-          while (j < post.text.length && post.text[j] === "\\"
-                 && "bui".includes(post.text[j + 1] || "")) {
-            if (!fmts.includes(post.text[j + 1])) fmts.push(post.text[j + 1]);
-            j += 2;
-          }
-          let k = j;  // v1.7.1: a token ends where a recognized escape starts, so chained
-                      // escapes each fire instead of being swallowed into one word - lockstep
-                      while (k < post.text.length && !/\s/.test(post.text[k])
-                 && !(post.text[k] === "\\" && "nubi".includes(post.text[k + 1] || ""))) k++;
-          if (k > j) {
-            // v1.5.8 fix: nest the tags around the word (b> i> text), lockstep with format_text()
-            let cur = span;
-            for (const t of fmts) { const el = document.createElement(t); cur.appendChild(el); cur = el; }
-            cur.appendChild(document.createTextNode(post.text.slice(j, k)));  // textContent: always safe
-            i = k;
-          } else { span.appendChild(document.createTextNode(post.text.slice(i - 1, j))); i = j; }
-        } else if (ch === "`") {
-          const end = post.text.indexOf("`", i + 1);
-          if (end !== -1) {
-            const el = document.createElement("code");
-            // v1.5.9: \n still breaks lines inside code spans; all else literal.
-            let buf = "";
-            for (let t = i + 1; t < end;) {
-              if (post.text[t] === "\\" && post.text[t + 1] === "n") {
-                if (buf) { el.appendChild(document.createTextNode(buf)); buf = ""; }
-                el.appendChild(document.createElement("br"));
-                t += 2;
-              } else { buf += post.text[t]; t++; }
-            }
-            if (buf) el.appendChild(document.createTextNode(buf));
-            span.appendChild(el);
-            i = end + 1;
-          } else { span.appendChild(document.createTextNode(ch)); i++; }
-        } else if (ch === "\n") { span.appendChild(document.createElement("br")); i++; }
-        else { span.appendChild(document.createTextNode(ch)); i++; }  // text nodes only: no injection
-      }
+      fmtWalk(post.text, i, span, 0);  // v1.19.1: shared escape walk - lockstep with format_text()
       if (post.attach) {
         if (post.attach.is_image) {
           const wrap = document.createElement("span");  // v1.5.3: hover-download icon
@@ -901,11 +987,11 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
       leftGroup.append(
         mk(page > 1 ? "/?page=1" : null, '<span class="g">\u23EE</span>', page <= 1, "pg-end"),
         mk(page > 5 ? "/?page=" + (page - 5) : null, '<span class="half"><span>\u25C0</span></span><span class="half"><span>\u25C0</span></span>', !(page > 5)),
-        mk(page > 1 ? "/?page=" + (page - 1) : null, "\u25C0", page <= 1));
+        mk(page > 1 ? "/?page=" + (page - 1) : null, '<span class="gs">\u25C0</span>', page <= 1));
       const rightGroup = document.createElement("span");
       rightGroup.className = "pager-group";
       rightGroup.append(
-        mk(page < totalPages ? "/?page=" + (page + 1) : null, "\u25B6", page >= totalPages),
+        mk(page < totalPages ? "/?page=" + (page + 1) : null, '<span class="gs">\u25B6</span>', page >= totalPages),
         mk(page + 5 <= totalPages ? "/?page=" + (page + 5) : null, '<span class="half"><span>\u25B6</span></span><span class="half"><span>\u25B6</span></span>', !(page + 5 <= totalPages)),
         mk(page < totalPages ? "/?page=" + totalPages : null, '<span class="g">\u23ED</span>', page >= totalPages, "pg-end"));
       p.replaceChildren(leftGroup, info, rightGroup)
@@ -940,6 +1026,7 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
   window.tiltRefresh = () => { lastSig = ""; poll(); };  // v1.14.0: re-arm after a search closes
 })();
 </script>
+
 <script>
 // v1.14.0: search bar - a live filter over the whole chat.txt, toggled by the
 // magnifier left of the settings gear. Three characters or more activate it;
@@ -959,8 +1046,13 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
     const c = document.querySelector("form.composer");
     if (!c) return;
     const r = c.getBoundingClientRect();
+    let width = Math.max(200, r.width);
+    // v1.20.0: the magnifier is fixed to the browser's right border - in multi-column layouts the composer's rect
+    // can run past it and the bar overlaps the icon; trim the width instead (both rects are viewport-relative).
+    const ir = icon.getBoundingClientRect();
+    if (r.left + width > ir.left - 8) width = Math.max(160, ir.left - 8 - r.left);   // keep an 8px gap before the icon
     input.style.left = r.left + "px";
-    input.style.width = Math.max(200, r.width) + "px";
+    input.style.width = width + "px";
     if (wrap && !input.classList.contains("hidden")) {
       wrap.style.paddingTop = (8 + input.offsetHeight + 8) + "px";   // themes give an 8px top gap already
     }
@@ -1131,7 +1223,7 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
   background: var(--panel, #fff); color: var(--ink, #333); box-shadow: 0 2px 8px rgba(0,0,0,.25); }
 #searchIcon:hover { transform: scale(1.12); transition: transform .15s; }
 #searchInput { position: fixed; top: 8px; left: 0; z-index: 61;
-  width: 300px; box-sizing: border-box; outline: none; }
+  width: 300px; height: 42px; line-height: 40px; box-sizing: border-box; outline: none; }
 /* its padding / font / border / background come from each theme's textarea#message
    rule (shared selector), so the search bar looks exactly like the composer text box */
 #settingsBox { position: fixed; top: 0; left: 0; right: 0; z-index: 50; display: flex; gap: 18px;
@@ -1148,25 +1240,35 @@ button#attachBtn { flex: none; padding: 8px 10px; border-radius: 8px; cursor: po
   border: 1px solid var(--line, #ccc); background: var(--field, #fff); color: inherit; }
 button#attachBtn:hover { transform: scale(1.12); transition: transform .15s; }
 .msg-wrap { position: relative; display: block; flex: 1; min-width: 0; }
-textarea#message { width: 100%; box-sizing: border-box; }
-/* v1.10.2: frameless paperclip - an absolutely-positioned overlay in the text
-   box's top-right corner (outside the composer flex flow, so it can never shrink
-   or reflow the textarea). The SVG inherits currentColor, and each theme paints a
-   vivid accent for it in its own stylesheet; hover zooms + glows with that color,
-   attaching pops it in, and a tiny ✕ fades in beside it on hover to remove the file */
-#pendingChip { position: absolute; top: 6px; right: 8px; z-index: 2; display: inline-flex;
+/* v1.17.x: every composer child gets one exact line height, so the text box,
+   search bar and all buttons sit flush on every theme (PC + mobile). The
+   auto-grow inline style still wins when the user types a new line */
+textarea#message { width: 100%; box-sizing: border-box; min-height: 42px; }
+button#emojiBtn, button#attachBtn, button#post { height: 42px; }
+/* v1.19.x: pending attachments live INSIDE the text box - a right-anchored row of
+   chips in its top-right corner, completely outside the composer flex flow (so smiley
+   and paperclip buttons keep their normal single gap). Chips fill right-to-left; when
+   they run out of room they wrap to a second line inside the box and fitChips() grows
+   the textarea until every chip + one text line stay visible. Each clip keeps its own
+   tiny ✕ (fades in on hover) that removes just that file, plus the v1.10.x pop-in +
+   glow - currentColor paints each chip in the theme's vivid accent */
+#pendingChips { position: absolute; top: 6px; right: 8px; z-index: 2;
+  max-width: calc(100% - 16px); display: flex; flex-direction: row-reverse;
+  align-items: center; gap: 6px; flex-wrap: wrap; }
+.chip { position: relative; display: inline-flex;
   align-items: center; justify-content: center; width: 24px; height: 24px; cursor: default;
   color: var(--line, #9aa7b5);
   animation: chipPop .3s cubic-bezier(.34,1.56,.64,1); transition: transform .18s ease-out, filter .18s ease-out; }
-#pendingChip:hover { transform: scale(1.25) rotate(-8deg);
+.chip:hover { transform: scale(1.25) rotate(-8deg);
   filter: drop-shadow(0 0 5px currentColor) drop-shadow(0 0 12px currentColor); transition-delay: .4s; }
 @keyframes chipPop { from { opacity: 0; transform: scale(.3); } to { opacity: 1; transform: none; } }
-/* the ✕ sits just left of the clip and only becomes visible while hovering it or the clip */
-#chipRemove { position: absolute; top: 7px; right: 34px; z-index: 2; width: 18px; height: 18px;
+/* the ✕ sits just left of its clip and only becomes visible while hovering it or the chip */
+.chip-x { position: absolute; right: 26px; top: 50%; transform: translateY(-50%);
+  width: 18px; height: 18px;
   padding: 0; border: none; border-radius: 50%; background: transparent; color: inherit;
   font-size: 12px; line-height: 1; cursor: pointer; opacity: 0; transition: opacity .15s, transform .15s; }
-#pendingChip:hover ~ #chipRemove, #chipRemove:hover { opacity: .9; }
-#chipRemove:hover { transform: scale(1.3); }
+.chip:hover .chip-x, .chip-x:hover { opacity: .9; }
+.chip-x:hover { transform: translateY(-50%) scale(1.3); }
 /* upload progress (v1.16.x): a semi-transparent fill painted over the text box
    while the paperclip path is sending - typed text stays readable underneath,
    label with filename + x / y MB sits on the left edge; structure here, any theme can restyle */
@@ -1199,14 +1301,32 @@ textarea#message { width: 100%; box-sizing: border-box; }
    Each arrow is a fixed-height box centred by line-height alone: no baseline,
    so fonts that draw media glyphs or squashed triangles slightly off-centre
    can't shift one icon up/down relative to its neighbours */
+/* the icon ink now sits ~2px below its anchor-box centre (desktop squash +
+   translateY tweak), so optically-centre the middle page text by moving it
+   3px down - user instruction, all themes inherit this */
+.pager-info { transform: translateY(3px); }
 .pager-group { display: inline-flex; align-items: center; gap: 2em; }
 .arrow { box-sizing: border-box; height: 42px; line-height: 40px; font-family: "Segoe UI Symbol", "Cascadia Code", "Noto Sans Symbols 2", monospace; }
-/* v1.9.x: the first/last-page media glyphs (U+23EE / U+23ED) are inked a hair
-   lower and smaller than the geometric triangles by the symbol font - nudge the
-   two arrows up and stretch only their glyph span vertically (kept out of the
-   anchor so the themes' hover transforms stay intact) */
-.arrow.pg-end { position: relative; top: -4px; }
-.arrow.pg-end .g { display: inline-block; transform: scaleY(1.3); }
+/* v1.17.x: flat labels - arrow glyphs are squashed (same width, same box size,
+   no per-glyph nudges) and kept on the inner span so theme hover transforms
+   on the anchor stay intact. First/last-page glyphs use .g; the step arrows
+   (.gs) and jump-5 triangles read a touch taller than them at desktop 34px,
+   so they get one extra notch of squash (~85 percent of their current height).
+   The mobile block below restores the uniform phone look. */
+/* every inner glyph span gets the SAME fixed box (42px = .arrow height) so all
+   four glyph kinds share one baseline and one vertical centre BEFORE squashing;
+   scaleY then shrinks each around that common centre -> equal centres, no drift.
+   Ink heights measured from the actually-rendering font (Segoe UI Symbol):
+   U+25C0/25B6 = 126px @160px font (0.787em), U+23EE/23ED = 100px (0.625em).
+   .g stays at the original uniform squash (.7) - first/last icons are NOT
+   touched; .gs and jump-5 halves get .6 so their ink lands at ~85% of the
+   working-state triangle height while pg-end keeps its exact old size. */
+.arrow .g, .arrow .gs { display: inline-block; height: 42px; line-height: 42px;
+  transform-origin: center; }
+.arrow .g { transform: scaleY(.7); }
+/* user tweak 2026-11-09: step + jump-5 icons sit 2px lower and at 95% of the
+   previous squash (0.6 -> 0.57); first/last icons (.g) remain untouched */
+.arrow .gs { transform: translateY(2px) scaleY(.57); }
 /* v1.9.x: tilt cards rotate up to ~3deg around their centre, so a wide bottom row
    spills visually below the grid box - keep the bottom pager clear of it */
 #board { margin-bottom: 22px; }
@@ -1221,7 +1341,8 @@ textarea#message { width: 100%; box-sizing: border-box; }
    triangle - tighter reads as triangles sitting on each other, looser leaves
    a visible gap, so this pitch stays as-is across all themes. */
 .arrow .half { display: inline-block; width: .45em; margin-right: -.1em; overflow: hidden; }
-.arrow .half > span { display: inline-block; transform: scaleX(.5); transform-origin: left center; }
+.arrow .half > span { display: inline-block; height: 42px; line-height: 42px;
+  transform: translateY(2px) scaleX(.5) scaleY(.57); transform-origin: left center; }
 /* tilt hover zoom (v1.8.0) - same :hover event as the delete cross; keeps each card's rotation */
 .tilt:hover, .tilt:focus-within { transform: rotate(var(--tilt)) scale(1.04); z-index: 3; }
 /* emoji picker (v1.5.5) - structure here, neutral colors with theme-var fallbacks */
@@ -1258,6 +1379,54 @@ button#emojiBtn:hover { transform: scale(1.12) rotate(-8deg); transition: transf
   background: var(--field, #fff); color: inherit; }
 #delYes { background: #c2503f; border-color: #a83e2f; color: #fff; }
 #delNo:hover { opacity: .75; }
+/* v1.17.0: the jump-5 arrows are two inline spans - without nowrap a narrow box
+   wraps them onto two lines (the "falling apart" seen on phones). Desktop never
+   wrapped because it fits, so this changes nothing visually there */
+.arrow { white-space: nowrap; }
+/* v1.17.0 mobile layout (~<=700px): the fixed top icons and the one-row settings
+   box were built for wide screens - on a phone they crowd the page and the four
+   controls overflow, so the user can't reach/save them all. Everything below is
+   media-scoped; desktop rules above are untouched.
+   1) both round buttons shrink from 42px to 30px (glyphs scale with the font)
+      and move in toward the edges;
+   2) #settingsBox stacks its rows vertically so Name / Style / Rows / Columns
+      each get a full line - all four reachable at ~360px width. The right padding
+      no longer reserves room for two fixed icons sitting inside it.
+   3) pager: the user-verified icon shapes stay, only sizes drop one step
+      (font 34 -> 22px, box 42 -> 28px). .arrow's inline height/line-height pair
+      is kept in lockstep so glyphs stay centred exactly as on desktop. The
+      2em inner gaps between triplets halve to 1em so all six icons plus the
+      page info fit one line at 375px; the whole bar also gets a little smaller */
+@media (max-width: 700px) {
+  #settingsIcon, #searchIcon { top: 8px; width: 30px; height: 30px; font-size: 16px; }
+  #settingsIcon { right: 10px; }
+  #searchIcon { right: 46px; }
+  #settingsBox { flex-direction: column; align-items: stretch; gap: 10px;
+    padding: 12px 14px; }
+  #settingsBox .row { justify-content: space-between; width: 100%; }
+  #settingsBox input, #settingsBox select {
+    flex: 1; min-width: 0; box-sizing: border-box; text-align: center; }
+  /* the search bar's right edge must clear both shrunken round buttons;
+     left+right instead of a vw-based width - immune to scrollbar quirks.
+     max-width guards against intrinsic input sizing on narrow engines */
+  #searchInput { width: auto; max-width: calc(100vw - 94px); right: 84px; top: 6px; }
+  /* only Post gets half its desktop size - emoji/paperclip stay as-is, so the
+     composer row frees exactly one button's worth of room for text */
+  button#post { padding: 10px 12px; font-size: 14px; }
+  .pager { padding: 2px 4px; }
+  .arrow { font-size: 22px; height: 28px; line-height: 26px; }
+  /* phones already looked uniform with every glyph at the base squash -
+     undo the desktop-only extra flattening for step and jump-5 arrows;
+     same shared fixed box as desktop (scaled to phone .arrow height) so
+     alignment stays identical to what was approved on mobiles */
+  .arrow .g, .arrow .gs { height: 28px; line-height: 28px; }
+  .arrow .half > span { height: 28px; line-height: 28px; }
+  .arrow .gs { transform: scaleY(.7); }
+  .arrow .half > span { transform: scaleX(.5) scaleY(.7); transform-origin: left center; }
+  .pager-group { gap: 1em; }
+  /* phone icons were never shifted - keep the text exactly centred there */
+  .pager-info { font-size: 10px; transform: none; }
+}
 </style>
 </body>
 </html>
@@ -1366,10 +1535,10 @@ def render_pager(current: int, total: int) -> str:
         '<span class="pager-group">'
         + _nav_arrow("/?page=1", '<span class="g">&#9198;</span>', current > 1, "pg-end")
         + _nav_arrow(f"/?page={current - 5}", '<span class="half"><span>&#9664;</span></span><span class="half"><span>&#9664;</span></span>', current > 5)
-        + _nav_arrow(f"/?page={current - 1}", "&#9664;", current > 1) + '</span>')
+        + _nav_arrow(f"/?page={current - 1}", '<span class="gs">&#9664;</span>', current > 1) + '</span>')
     right = (
         '<span class="pager-group">'
-        + _nav_arrow(f"/?page={current + 1}", "&#9654;", current < total)
+        + _nav_arrow(f"/?page={current + 1}", '<span class="gs">&#9654;</span>', current < total)
         + _nav_arrow(f"/?page={current + 5}", '<span class="half"><span>&#9654;</span></span><span class="half"><span>&#9654;</span></span>', current + 5 <= total)
         + _nav_arrow(f"/?page={total}", '<span class="g">&#9197;</span>', current < total, "pg-end") + '</span>')
     return f'<div class="pager">{left}<span class="pager-info">Page {current} of {total}</span>{right}</div>'
@@ -1381,29 +1550,19 @@ def render_pager(current: int, total: int) -> str:
 NAME_RE = re.compile(r"^([^:/\\\n`]{1,24}):(?: |$)")
 
 
-def format_text(raw: str) -> str:
-    """Safe HTML for one tilt's stored text. The escape set is documented in
-    readme.md - every character not consumed by an escape or a code span is
-    html.escape()d, so user input can never inject markup:
-      \\n        new line          `code`  inline code span, literal inside
-      \\bword    bold the next non-space token (\\u/\\i likewise)
-      stacked    prefixes apply together in written order - \\b\\itext becomes <b><i>text</i></b>
-                 with closing tags unwound in reverse; duplicate letters are ignored. An escape
-                 run without a word after it stays literal (v1.5.8).
-      A formatted token ends where any recognized escape starts, so \\uwork\\n\\bsee underlines
-                 work only, breaks the line, then bolds see - chained escapes never get
-                 swallowed into the previous word (v1.7.1).
-      name:     leading "name:" prefix renders as a badge; the colon disappears
-                 (the app adds this prefix itself - see README)
-    """
-    out = []
-    m = NAME_RE.match(raw)          # v1.6.0: name badge, colon hidden
-    if m:
-        out.append(f'<span class="user">{html.escape(m.group(1))}</span>')
-        i = m.end()                 # past name + ':' and one space (or end of string)
-    else:
-        i = 0
-    n = len(raw)
+def _fmt_loop(raw: str, start: int, out: list, depth: int = 0,
+              stop: int | None = None) -> None:
+    """Escape-interpret raw[start:] and append HTML to `out` (no name badge).
+    v1.19.1: ~~ spans behave like a formatting word - escapes work inside them,
+    and an escape run with no word right before a paired ~~ wraps the whole span.
+    Spans nest at most one level deep; any further ~~ pair stays literal, same
+    spirit as code spans.
+
+    v1.19.1 fix: `stop` bounds the walk - a span's content is interpreted only up to its
+    own closing pair (previously the recursive call ran past it and rendered the closer
+    as an unmatched literal ~~)."""
+    i = start
+    n = len(raw) if stop is None else min(stop, len(raw))
     while i < n:
         ch = raw[i]
         if ch == "\\" and i + 1 < n and raw[i + 1] in "nubi":
@@ -1422,7 +1581,10 @@ def format_text(raw: str) -> str:
             k = j
             # v1.7.1: a token ends where a recognized escape starts, so chained escapes
             # (e.g. \uwork\n\bsee) each fire instead of being swallowed into one word.
+            # v1.19.0: a token also ends at any tilde, so ~~spans~~ never swallow
+            # formatted words (and vice versa) - same boundary as code spans.
             while k < n and not raw[k].isspace() \
+                    and raw[k] != "~" \
                     and not (raw[k] == "\\" and k + 1 < n and raw[k + 1] in "nubi"):
                 k += 1
             if k > j:  # a word really follows the escape(s)
@@ -1430,7 +1592,19 @@ def format_text(raw: str) -> str:
                 out.append(html.escape(raw[j:k]))
                 out.append("".join(f"</{t}>" for t in reversed(fmts)))
                 i = k
-            else:      # no word - keep the sequence literal, escaped
+            elif raw[j:j + 2] == "~~":   # v1.19.1: no word, but a ~~span~~ follows - the
+                end = raw.find("~~", j + 2)  # stacked escapes wrap its whole content
+                if end != -1 and depth < 2:
+                    out.append("".join(f"<{t}>" for t in fmts))
+                    out.append("<s>")
+                    _fmt_loop(raw, j + 2, out, depth + 1, end)   # v1.19.1: bounded by the closing pair
+                    out.append("</s>")
+                    out.append("".join(f"</{t}>" for t in reversed(fmts)))
+                    i = end + 2
+                else:      # no closing pair (or nested too deep) - literal escapes
+                    out.append(html.escape(raw[i:j]))
+                    i = j
+            else:      # no word and no span after - keep the sequence literal, escaped
                 out.append(html.escape(raw[i:j]))
                 i = j
         elif ch == "`":
@@ -1444,12 +1618,51 @@ def format_text(raw: str) -> str:
             else:          # unmatched backtick stays literal
                 out.append(html.escape(ch))
                 i += 1
+        elif ch == "~" and raw[i:i + 2] == "~~":   # v1.19.0: ~~text~~ strikethrough span
+            end = raw.find("~~", i + 2)
+            if depth < 2 and end != -1:
+                # v1.19.1: escapes work inside the span too (\b/\u/\i per word, \n line breaks);
+                # any further ~~ pair inside stays literal.
+                out.append("<s>")
+                _fmt_loop(raw, i + 2, out, depth + 1, end)   # v1.19.1: bounded by the closing pair
+                out.append("</s>")
+                i = end + 2
+            else:          # unmatched ~~ (or a nested pair) keeps both tildes literal
+                out.append(html.escape(raw[i:i + 2]))
+                i += 2
         elif ch == "\n":   # real newline kept as a safety no-op since v1.5.6
             out.append("<br>")
             i += 1
         else:
             out.append(html.escape(ch))
             i += 1
+
+
+def format_text(raw: str) -> str:
+    """Safe HTML for one tilt's stored text. The escape set is documented in
+    readme.md - every character not consumed by an escape or a span is
+    html.escape()d, so user input can never inject markup:
+      \\n        new line          `code`  inline code span, literal inside
+      ~~text~~   strikethrough span - escapes work inside it (per word) and stacked
+                 prefixes before it wrap the whole content; an unmatched ~~ keeps both tildes as-is
+      \\bword    bold the next non-space token (\\u/\\i likewise)
+      stacked    prefixes apply together in written order - \b\itext becomes <b><i>text</i></b>
+                 with closing tags unwound in reverse; duplicate letters are ignored. An escape
+                 run without a word after it stays literal, unless a ~~span~~ follows (v1.5.8/v1.19.1).
+      A formatted token ends where any recognized escape starts or at the first tilde,
+                 so \\uwork\\n\\bsee underlines work only, breaks the line, then bolds see -
+                 chained escapes never get swallowed into the previous word (v1.7.1).
+      name:     leading "name:" prefix renders as a badge; the colon disappears
+                 (the app adds this prefix itself - see README)
+    """
+    out = []
+    m = NAME_RE.match(raw)          # v1.6.0: name badge, colon hidden
+    if m:
+        out.append(f'<span class="user">{html.escape(m.group(1))}</span>')
+        i = m.end()                 # past name + ':' and one space (or end of string)
+    else:
+        i = 0
+    _fmt_loop(raw, i, out)          # v1.19.1: shared loop - also used inside ~~ spans
     return "".join(out)
 
 
@@ -1481,7 +1694,7 @@ def render_posts(page: int = 1) -> str:
         # every card - quote=True keeps quotes/newlines inside the attribute
         attach_name = html.escape(attach["name"], quote=True) if attach else ""
         cards.append(f'<div class="tilt{emoji_cls}" data-c="{post["color"]}" style="--tilt: {tilt} "'
-                     f'data-text="{html.escape(post["text"], quote=True)} "'
+                     f'data-text="{html.escape(post["text"], quote=True)}"'
                      f'data-attach="{attach_name}">{delete_btn}'
                      f'<span class="text">{text}</span>{extra}</div>')
     return "\n".join(cards)
@@ -1538,7 +1751,11 @@ class Handler(BaseHTTPRequestHandler):
                     .replace("__DEFAULT_ROWS__", str(ROWS))
                     .replace("__DEFAULT_COLUMNS__", str(COLUMNS)))
             body = page.encode("utf-8")
-            self._send(200, body, {"Content-Type": "text/html; charset=utf-8"})
+            # v1.18.1: no-store - the grid (rows/cols) and all settings logic live in this
+            # document's inline JS, so a heuristically cached copy would silently ignore the
+            # visitor's cookie preferences while server-side things (style) kept working.
+            self._send(200, body, {"Content-Type": "text/html; charset=utf-8",
+                                   "Cache-Control": "no-store"})
         elif path == "/style.css":
             name_param = parse_qs(parsed.query).get("name", [None])[0]  # per-visitor theme
             body, ok = self._css_for(name_param)
@@ -1565,6 +1782,21 @@ class Handler(BaseHTTPRequestHandler):
             # one page of JSON alone cannot say "page 2 exists".
             body = json.dumps({"total": len(POSTS), "posts": newest_first}).encode("utf-8")
             self._send(200, body, {"Content-Type": "application/json", "Cache-Control": "no-store"})
+        elif path.startswith("/logo/"):  # v1.16.1: static assets for header.html from <app-folder>/logo/
+            name = unquote(path[len("/logo/"):])
+            root = os.path.realpath(os.path.join(BASE_DIR, "logo"))
+            real = os.path.realpath(os.path.join(root, name))  # traversal guard (same rule as /files/):
+            try:
+                contained = os.path.commonpath([real, root]) == root
+            except ValueError:      # cross-drive / UNC-vs-local mismatch -> outside folder
+                contained = False
+            if not contained or not os.path.isfile(real):
+                self._send(404, b"Not found")
+                return
+            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            with open(real, "rb") as f:
+                body = f.read()
+            self._send(200, body, {"Content-Type": ctype})  # inline: <img> in the header renders it
         elif path.startswith("/files/"):
             name = unquote(path[len("/files/"):])
             real = os.path.realpath(os.path.join(DATA_FOLDER, name))  # traversal guard:

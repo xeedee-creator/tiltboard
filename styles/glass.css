@@ -1,0 +1,129 @@
+/* Tiltboard — "glass" style: colorful translucent glass tiles with 3D depth */
+
+:root { color-scheme: dark;
+  --tb-ink: #f2f6ff; --tb-accent: #7fd4ff; --tb-muted: rgba(127, 212, 255, .6); } /* v1.15.0: shared header palette */
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  /* neutral graphite floor + a warm sun spot from the top-right,
+     so each tile's glow reads as light cast through colored glass */
+  background:
+    radial-gradient(120% 85% at 78% -12%, rgba(255, 241, 209, .16) 0%, rgba(255, 241, 209, 0) 55%),
+    linear-gradient(165deg, #262a31 0%, #1b1e24 48%, #131519 100%);
+  min-height: 100vh;
+}
+.wrap { max-width: 640px; margin: 0 auto; padding: 8px 16px 64px; }
+
+form.composer { display: flex; gap: 8px; margin-bottom: 28px; }
+textarea#message,
+input#searchInput {  /* v1.14.x: search bar shares the composer text box's look */
+  resize: none;
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 16px;
+  font-family: inherit;
+  color: #f2f6ff;
+  background: rgba(255, 255, 255, .1);
+  border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: 10px;
+  outline: none;
+  overflow-y: hidden;  /* v1.5.10: height grows with content, no scrollbar */
+}
+textarea#message:focus { box-shadow: 0 0 14px rgba(255, 255, 255, .35); border-color: rgba(255, 255, 255, .6); }
+span.user { display: inline-block; padding: 1px 8px; margin-right: 6px; border-radius: 999px;
+  background: rgba(255, 255, 255, .14); color: #fff; border: 1px solid rgba(255, 255, 255, .4); font-weight: 700;
+  font-size: .82em; vertical-align: baseline; text-shadow: none; }
+form.composer.drop-target textarea#message {
+  border-style: dashed;
+  box-shadow: 0 0 18px rgba(127, 212, 255, .8);
+}
+
+button#post {
+  padding: 10px 22px;
+  font-size: 16px;
+  font-weight: 700;
+  font-family: inherit;
+  letter-spacing: 1px;
+  color: #fff;
+  background: linear-gradient(90deg, rgba(255, 138, 124, .85), rgba(167, 120, 255, .85));
+  border: 1px solid rgba(255, 255, 255, .4);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: filter .15s ease, transform .1s ease;
+}
+button#post:hover { filter: brightness(1.18) drop-shadow(0 0 10px rgba(255, 138, 124, .6)); }
+button#post:active { transform: scale(.97); }
+
+/* v1.5.2 pagination arrows */
+.pager { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 6px; }
+.arrow { font-size: 34px; line-height: 1; text-decoration: none; color: #cfe8ff; padding: 0; user-select: none; }
+a.arrow:hover { text-shadow: 0 0 14px rgba(255, 255, 255, .9); transform: scale(1.15); transition: transform .1s ease; color: #fff; }
+.arrow.disabled { opacity: .25; cursor: default; }
+.pager-info { font-size: 12px; color: rgba(207, 232, 255, .6); letter-spacing: .08em; text-transform: uppercase; }
+
+/* v1.7.0: row-major grid - --cols is set by JS from this visitor's cookie.
+   No perspective here on purpose (v1.18.x): any 3D context foreshortens the
+   card content, which reads as a skew on pictures inside the glass */
+.board { display: grid; grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr)); gap: 20px; justify-items: center; padding-top: 8px; }
+
+.tilt {
+  --tilt: 0deg;
+  width: 100%; max-width: min(420px, 90%); /* v1.7.0: relax inside multi-column grids */
+  /* flat glass (v1.18.x): pure 2D rotation only - no rotateX/skew, so text and
+     pictures stay undistorted; the slab's thickness is painted with inset shadows */
+  transform: rotate(var(--tilt));
+  padding: 16px 20px;
+  border-radius: 14px;
+  font-size: 17px;
+  line-height: 1.5;
+  color: #fff;
+  background-color: rgba(255, 255, 255, .13);
+  backdrop-filter: blur(10px) saturate(1.4); -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, .4);
+  /* bright top rim + inner bottom edge = the illusion of glass thickness,
+     dark drop shadow keeps the slab readable off the floor */
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, .45),
+    inset 0 -8px 14px rgba(255, 255, 255, .07),
+    0 10px 26px rgba(0, 0, 0, .45);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* keep the v1.8.0 hover zoom, still rotation-only so nothing deforms */
+#board .tilt:hover, #board .tilt:focus-within {
+  transform: rotate(var(--tilt)) scale(1.04);
+  z-index: 3;
+}
+
+.tilt[data-c="0"] { background-color: rgba(255, 217, 63, .2); border-color: #ffd93faa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #ffd93f5e, 0 24px 80px #ffd93f4d; }
+.tilt[data-c="1"] { background-color: rgba(255, 92, 157, .2); border-color: #ff5c9daa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #ff5c9d5e, 0 24px 80px #ff5c9d4d; }
+.tilt[data-c="2"] { background-color: rgba(87, 255, 163, .18); border-color: #57ffa3aa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #57ffa359, 0 24px 80px #57ffa345; }
+.tilt[data-c="3"] { background-color: rgba(77, 201, 255, .2); border-color: #4dc9ffaa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #4dc9ff5e, 0 24px 80px #4dc9ff4d; }
+.tilt[data-c="4"] { background-color: rgba(194, 107, 255, .2); border-color: #c26bffaa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #c26bff5e, 0 24px 80px #c26bff4d; }
+.tilt[data-c="5"] { background-color: rgba(255, 214, 90, .2); border-color: #ffd65aaa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #ffd65a5e, 0 24px 80px #ffd65a4d; }
+.tilt[data-c="6"] { background-color: rgba(127, 227, 255, .2); border-color: #7fe3ffaa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #7fe3ff5e, 0 24px 80px #7fe3ff4d; }
+.tilt[data-c="7"] { background-color: rgba(255, 158, 92, .2); border-color: #ff9e5caa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #ff9e5c5e, 0 24px 80px #ff9e5c4d; }
+.tilt[data-c="8"] { background-color: rgba(125, 255, 184, .18); border-color: #7dffb8aa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #7dffb859, 0 24px 80px #7dffb845; }
+.tilt[data-c="9"] { background-color: rgba(255, 171, 107, .2); border-color: #ffab6baa; box-shadow: inset 0 2px 0 rgba(255, 255, 255, .45), inset 0 -8px 14px rgba(255, 255, 255, .07), 0 10px 26px rgba(0, 0, 0, .45), 0 0 30px #ffab6b5e, 0 24px 80px #ffab6b4d; }
+
+.empty { color: #9db3d6; font-style: italic; margin-top: 24px; }
+
+/* attachments (v1.4) - layout lives in app.py, theme visuals here */
+.tilt img.preview {
+  border: 1px solid rgba(255, 255, 255, .35);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .4);
+}
+.attach-img .dl { color: #fff; background: rgba(20, 16, 40, .55); border: 1px solid rgba(255, 255, 255, .35); }
+.attach-img:hover .dl { background: rgba(255, 255, 255, .22); box-shadow: 0 0 10px rgba(255, 255, 255, .4); }
+.tilt a.download { color: #cfe8ff; text-decoration: underline dotted; border-bottom: 1px solid #7fd4ff66; }
+.tilt a.download:hover { opacity: 1; filter: drop-shadow(0 0 6px rgba(255, 255, 255, .5)); color: #fff; }
+/* tilt delete cross (v1.5.4) */
+.tilt .del { color: #ffb3a7; background: rgba(20, 16, 40, .55); border: 1px solid rgba(255, 179, 167, .45); }
+.tilt .del:hover { color: #fff; background: rgba(255, 92, 74, .3); border-color: #ff8a7d;
+  box-shadow: 0 0 10px rgba(255, 92, 74, .55); }
+button#attachBtn { --line: rgba(255, 255, 255, .35); --field: rgba(255, 255, 255, .1); color: #f2f6ff; }
+/* pending-file clip - frosted white on the glass field */
+.chip { color: #dff4ff; }
+/* emoji button (v1.5.5) - identical border to the attachment icon */
+button#emojiBtn { --line: rgba(255, 255, 255, .35); --field: rgba(255, 255, 255, .1); color: #f2f6ff; }

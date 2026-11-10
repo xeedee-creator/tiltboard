@@ -7,6 +7,8 @@
        - "header.<style>.html"    -> e.g. header.neon.html, only used when that style
                                      is the configured default (power-user override)
   2. Edit freely: text, logo image, links... plain HTML fragments, no <html>/<body> needed.
+     Images go into a "logo" folder next to app.py and are referenced as
+     /logo/<name> — the server serves that folder inline (since v1.16.1).
   3. Just refresh the browser — the file is read on every page load, NO server restart.
 
   STYLING HOOKS (defined by each theme in styles/*.css)
@@ -29,7 +31,7 @@
 </style>
 
 <div class="tb-header">
-  <!-- <img src="/file/<your-logo>.jpg" alt="logo"> -->
+  <!-- <img src="/logo/<your-logo>.jpg" alt="logo"> -->
   <h1>My Home <span>Repository</span></h1>
   <p>a small tiltboard for the whole network</p>
 </div>

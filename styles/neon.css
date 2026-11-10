@@ -76,16 +76,26 @@ a.arrow:hover { text-shadow: 0 0 14px rgba(63, 217, 196, .9); transform: scale(1
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.tilt[data-c="0"] { border-color: #ffe23f; text-shadow: 0 0 6px #ffe23f88; box-shadow: 0 0 14px #ffe23f55; }
-.tilt[data-c="1"] { border-color: #ff5c9d; text-shadow: 0 0 6px #ff5c9d88; box-shadow: 0 0 14px #ff5c9d55; }
-.tilt[data-c="2"] { border-color: #57ffa3; text-shadow: 0 0 6px #57ffa388; box-shadow: 0 0 14px #57ffa355; }
-.tilt[data-c="3"] { border-color: #4dc9ff; text-shadow: 0 0 6px #4dc9ff88; box-shadow: 0 0 14px #4dc9ff55; }
-.tilt[data-c="4"] { border-color: #c26bff; text-shadow: 0 0 6px #c26bff88; box-shadow: 0 0 14px #c26bff55; }
-.tilt[data-c="5"] { border-color: #ffd93f; text-shadow: 0 0 6px #ffd93f88; box-shadow: 0 0 14px #ffd93f55; }
-.tilt[data-c="6"] { border-color: #7fe3ff; text-shadow: 0 0 6px #7fe3ff88; box-shadow: 0 0 14px #7fe3ff55; }
-.tilt[data-c="7"] { border-color: #ff9e5c; text-shadow: 0 0 6px #ff9e5c88; box-shadow: 0 0 14px #ff9e5c55; }
-.tilt[data-c="8"] { border-color: #7dffb8; text-shadow: 0 0 6px #7dffb888; box-shadow: 0 0 14px #7dffb855; }
-.tilt[data-c="9"] { border-color: #ffab6b; text-shadow: 0 0 6px #ffab6b88; box-shadow: 0 0 14px #ffab6b55; }
+.tilt[data-c="0"] { border-color: #ffe23f; color: #fffbe0; text-shadow: 0 0 9px #ffe23faa, 0 0 22px #ffe23f66;
+  box-shadow: inset 0 0 18px rgba(255, 226, 63, .3), 0 0 4px #ffe23fd9, 0 0 18px #ffe23fb3, 0 0 44px #ffe23f73; }
+.tilt[data-c="1"] { border-color: #ff5c9d; color: #fff0f6; text-shadow: 0 0 9px #ff5c9daa, 0 0 22px #ff5c9d66;
+  box-shadow: inset 0 0 18px rgba(255, 92, 157, .3), 0 0 4px #ff5c9dd9, 0 0 18px #ff5c9db3, 0 0 44px #ff5c9d73; }
+.tilt[data-c="2"] { border-color: #57ffa3; color: #f0fff6; text-shadow: 0 0 9px #57ffa3aa, 0 0 22px #57ffa366;
+  box-shadow: inset 0 0 18px rgba(87, 255, 163, .3), 0 0 4px #57ffa3d9, 0 0 18px #57ffa3b3, 0 0 44px #57ffa373; }
+.tilt[data-c="3"] { border-color: #4dc9ff; color: #f0fbff; text-shadow: 0 0 9px #4dc9ffaa, 0 0 22px #4dc9ff66;
+  box-shadow: inset 0 0 18px rgba(77, 201, 255, .3), 0 0 4px #4dc9ffd9, 0 0 18px #4dc9ffb3, 0 0 44px #4dc9ff73; }
+.tilt[data-c="4"] { border-color: #c26bff; color: #f8f0ff; text-shadow: 0 0 9px #c26bffff, 0 0 22px #c26bff66;
+  box-shadow: inset 0 0 18px rgba(194, 107, 255, .3), 0 0 4px #c26bffd9, 0 0 18px #c26bffb3, 0 0 44px #c26bff73; }
+.tilt[data-c="5"] { border-color: #ffd93f; color: #fffbe8; text-shadow: 0 0 9px #ffd93faa, 0 0 22px #ffd93f66;
+  box-shadow: inset 0 0 18px rgba(255, 217, 63, .3), 0 0 4px #ffd93fd9, 0 0 18px #ffd93fb3, 0 0 44px #ffd93f73; }
+.tilt[data-c="6"] { border-color: #7fe3ff; color: #f2fdff; text-shadow: 0 0 9px #7fe3ffaa, 0 0 22px #7fe3ff66;
+  box-shadow: inset 0 0 18px rgba(127, 227, 255, .3), 0 0 4px #7fe3ffd9, 0 0 18px #7fe3ffb3, 0 0 44px #7fe3ff73; }
+.tilt[data-c="7"] { border-color: #ff9e5c; color: #fff6f0; text-shadow: 0 0 9px #ff9e5caa, 0 0 22px #ff9e5c66;
+  box-shadow: inset 0 0 18px rgba(255, 158, 92, .3), 0 0 4px #ff9e5cd9, 0 0 18px #ff9e5cb3, 0 0 44px #ff9e5c73; }
+.tilt[data-c="8"] { border-color: #7dffb8; color: #f2fff7; text-shadow: 0 0 9px #7dffb8aa, 0 0 22px #7dffb866;
+  box-shadow: inset 0 0 18px rgba(125, 255, 184, .3), 0 0 4px #7dffd9d9, 0 0 18px #7dffb8b3, 0 0 44px #7dffb873; }
+.tilt[data-c="9"] { border-color: #ffab6b; color: #fff5f0; text-shadow: 0 0 9px #ffab6baa, 0 0 22px #ffab6b66;
+  box-shadow: inset 0 0 18px rgba(255, 171, 107, .3), 0 0 4px #ffab6bd9, 0 0 18px #ffab6bb3, 0 0 44px #ffab6b73; }
 
 .empty { color: #7a739c; font-style: italic; margin-top: 24px; }
 
@@ -106,6 +116,6 @@ a.arrow:hover { text-shadow: 0 0 14px rgba(63, 217, 196, .9); transform: scale(1
   box-shadow: 0 0 10px rgba(255, 92, 74, .55); }
 button#attachBtn { --line: #3fd9c4; --field: #151228; color: #e6f7ff; }
 /* pending-file clip - electric cyan, the glow pops on the dark field (v1.10.2) */
-#pendingChip { color: #6ff7e2; }
+.chip { color: #6ff7e2; }
 /* emoji button (v1.5.5) - identical border to the attachment icon */
 button#emojiBtn { --line: #3fd9c4; --field: #151228; color: #e6f7ff; }

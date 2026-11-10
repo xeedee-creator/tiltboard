@@ -99,6 +99,6 @@ a.arrow:hover { background: rgba(122, 156, 198, .18); border-radius: 8px; transf
 .tilt .del:hover { color: #fff; background: #c2503f; }
 button#attachBtn { --line: #c9d3e0; --field: #fff; color: #4a73b5; }
 /* pending-file clip - vivid blue, glows on hover (v1.10.2) */
-#pendingChip { color: #2f5fb3; }
+.chip { color: #2f5fb3; }
 /* emoji button (v1.5.5) - identical border to the attachment icon */
 button#emojiBtn { --line: #c9d3e0; --field: #fff; color: #4a73b5; }

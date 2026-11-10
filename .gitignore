@@ -31,5 +31,8 @@ screenshots/*.png
 # Live runtime header (a fresh clone gets no header until one is created).
 header.html
 
+# Header images (logos) are per-installation assets - they live beside the running app only.
+logo/
+
 # The standalone binary is published as a GitHub Release asset only, not in the repo.
 tiltboard.exe

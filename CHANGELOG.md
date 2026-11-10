@@ -2,6 +2,60 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] - 2026-11-10
+
+### Fixed
+- A cookie *Name* no longer prefixed plain-text posts: since v1.18.0 the prefix lives in the file-posting path (`lineFor`), and the plain-text early return bypassed it — so `chat.txt` received bare messages while attachment posts kept their `Name:` badge. The early return now applies the same rule directly (a default-name post stays unprefixed; everything else becomes `Name: text`).
+- The search bar could overlap the magnifier icon in multi-column layouts, because it sized itself to the composer's right edge no matter how far that sat from the browser border. It now trims its width against the icon's actual position (always anchored top-right), keeping an 8px gap on every screen size and theme; resizing while open re-measures live.
+
+## [1.19.1] - 2026-11-10
+
+### Fixed
+- Stacked escape combinations (`\b\itext`, `\u\i\btext`, …) rendered only their first escape: the renderer consumed one prefix and stopped, leaving the rest as literal backslashes. All stacked prefixes now parse in written order.
+- A `\n` inside a code span (backticks) was not honored; line breaks now work there exactly like everywhere else outside formatting tokens.
+
+## [1.19.0] - 2026-11-10
+
+### Added
+- Strikethrough as the fifth formatting escape: type `~~text~~` (paired tildes, Markdown-style) and everything between them renders struck through (`<s>…</s>`). Everything inside stays literal — only `\n` still breaks a line, exactly like code spans — so a stray `~`, an unclosed `~~`, or a lone `~single` all render as-is. Formatting tokens now stop at any tilde too, which keeps combinations such as `\bword~~span~~ tail` from swallowing the span into a bolded word.
+- Paste normalizer extended to strike tags: pasted `<s>…</s>`, `<strike>…</strike>` or `<del>…</del>` pairs are converted at paste time to one `~~…~~` span (duplicate/unclosed strike tags stay ignored, as with the other tag kinds). Server and client renderers remain lockstep — chat.txt stores only tildes.
+
+## [1.18.2] - 2026-11-10
+
+### Added
+- The pager info now self-proves the active board grid: “Page X of Y · R×C”. First paint announces the configured grid from config.json, and the inline script re-renders it moments later with each visitor’s own effective grid (cookie override or default). If the numbers shown don’t match what you set in the settings box, the page is being served from a stale cache — Ctrl+Shift+R makes that obvious.
+
+### Fixed
+- Board grid (rows/columns) appeared to be ignored when changed via config.json or the browser settings box: the whole server side verified correct (defaults baked into the page, CSS, JS), but heuristically cached copies of the page kept running their old inline defaults while server-side things like style updated. The page is now served with `Cache-Control: no-store`, so browsers can never run a stale grid again.
+
+## [1.18.0] - 2026-11-10
+
+### Added
+- Multiple attachments in one post: drop several files at once, paste multiple pictures, or pick many in the paperclip dialog. Each file appears as its own chip (paperclip glyph + name on hover) in a row inside the composer field; chips wrap to a next line and grow the field’s height when space runs out. A small ✕ on each chip (fades in on hover) removes just that one file before posting.
+- Posting with multiple files: the text-box content goes with the first file only, every additional file becomes its own tilt below it — matching how they are stored in chat.txt (one line per file). If any dropped/pasted file exceeds 256 MB the whole batch aborts *before* anything is posted and you’re steered to the paperclip (which always uses the chunked upload path); nothing is left half-posted.
+
+## [1.17.1] - 2026-11-09
+
+### Fixed
+- Deleting a tilt failed with `Delete failed: tilt not found`: the card's identity attribute was emitted as `data-text="… "` with a stray trailing space inside the quotes, so the browser-side delete lookup searched for *text + one extra space* — a string that never exists in `chat.txt`, and every confirm-dialog deletion came back empty. The attribute is now written exactly as stored (`data-text="{text}"`, no padding), so the exact-match lookup finds every line again; verified on all 35 cards.
+
+## [1.17.0] - 2026-11-09
+
+### Added
+- Mobile layout (viewport up to ~700 px, desktop untouched): the two fixed top-right buttons (settings gear, search magnifier) shrink from 42 px to 30 px and move in toward the edges; the settings box stacks its four rows vertically so Name, Style, Rows and Columns are all reachable on a narrow screen instead of overflowing one row; the pager bar becomes compact (icons ~⅔ size, gaps halved) so all six navigation icons plus "Page X of Y" fit one line at 375 px.
+- New phone visitors now default to **1 column** instead of the config value — full-width cards stacked vertically, because several columns per line would be too small to read on a narrow screen. The choice is prefilled into the first-visit settings box before it is saved; existing cookie holders and desktop defaults are never overwritten.
+
+### Fixed
+- The 5-page-jump arrows (two half-width triangles side by side) could fall apart onto two lines in a narrow pager box; `.arrow` now sets `white-space: nowrap`, so the pair always renders as one unit on any screen size. Nothing changes visually where there was room before.
+
+## [1.16.1] - 2026-11-08
+
+### Fixed
+- Header logo images came back as `404 (Not Found)`: the server only had a route for attachment downloads (`/files/<name>` from the data folder), so `<img src="/logo/<name>">` in header.html never resolved. The server now serves any file of a `logo` folder placed next to app.py at `/logo/<name>`, inline with the proper content type, guarded by the same path-traversal rule as attachment downloads.
+
+### Docs
+- README's header section now documents where banner images must live (`logo` folder beside app.py, referenced as `/logo/<name>`), and the example template's placeholder image points at that route instead of a dead one. `logo/` is gitignored — per-installation logos stay local and never reach the repository.
+
 ## [1.16.0] - 2026-11-07
 
 ### Added

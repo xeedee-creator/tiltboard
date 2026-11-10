@@ -103,7 +103,7 @@ a.arrow:hover { border-color: #a86b4c; background: rgba(168, 107, 76, .1); trans
 button#attachBtn { --line: #7c3f2c; --field: #fffdf6; color: #b5654a; border-width: 2px;
   box-shadow: 2px 3px 0 rgba(80, 70, 50, .2); }
 /* pending-file clip - warm sepia-brown ink (v1.10.2) */
-#pendingChip { color: #b5654a; }
+.chip { color: #b5654a; }
 /* emoji button (v1.5.5) - identical border to the attachment icon */
 button#emojiBtn { --line: #7c3f2c; --field: #fffdf6; color: #b5654a; border-width: 2px;
   box-shadow: 2px 3px 0 rgba(80, 70, 50, .2); }
