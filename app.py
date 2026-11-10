@@ -864,7 +864,29 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
           i = end + 2;
         } else { parent.appendChild(document.createTextNode("~~")); i += 2; }  // unmatched ~~ stays literal
       } else if (ch === "\n") { parent.appendChild(document.createElement("br")); i++; }
-      else { parent.appendChild(document.createTextNode(ch)); i++; }  // text nodes only: no injection
+      else {
+        // v1.21.0: auto-link URLs - lockstep with _fmt_loop(): find a known protocol
+        // marker at this position, then copy everything up to the next space (or the
+        // stop-bounded end of the line) as the href.
+        let url = null;
+        for (const p of ["http://", "https://", "ftp://"]) {
+          if (text.startsWith(p, i)) {
+            const sp = text.indexOf(" ", i);
+            url = (sp === -1 || sp > n) ? text.slice(i, n) : text.slice(i, sp);
+            break;
+          }
+        }
+        if (url !== null && url.length > 0) {
+          const a = document.createElement("a");
+          a.className = "lnk";
+          a.href = url;                              // DOM property: no escaping needed
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
+          a.textContent = url;
+          parent.appendChild(a);
+          i += url.length;
+        } else { parent.appendChild(document.createTextNode(ch)); i++; }  // text nodes only: no injection
+      }
     }
   }
 
@@ -1427,6 +1449,12 @@ button#emojiBtn:hover { transform: scale(1.12) rotate(-8deg); transition: transf
   /* phone icons were never shifted - keep the text exactly centred there */
   .pager-info { font-size: 10px; transform: none; }
 }
+/* v1.21.0: auto-linked URLs inside tilt text - clickable, opens a new tab.
+   One rule here (always loaded) serves every theme; the colour resolves from
+   each theme's own --tb-accent via var(). */
+.text a.lnk { color: var(--tb-accent, #4a73b5); text-decoration: underline;
+  overflow-wrap: anywhere; }
+.text a.lnk:hover { filter: brightness(1.12); }
 </style>
 </body>
 </html>
@@ -1549,6 +1577,10 @@ def render_pager(current: int, total: int) -> str:
 # followed by ": " or end of line (so URLs like http://... stay untouched).
 NAME_RE = re.compile(r"^([^:/\\\n`]{1,24}):(?: |$)")
 
+# v1.21.0: bare URLs in post text become clickable links that open a new tab.
+# Only explicit schemes match, so attachment hrefs (file:/relative paths) can never be hit.
+URL_PREFIXES = ("http://", "https://", "ftp://")
+
 
 def _fmt_loop(raw: str, start: int, out: list, depth: int = 0,
               stop: int | None = None) -> None:
@@ -1633,6 +1665,14 @@ def _fmt_loop(raw: str, start: int, out: list, depth: int = 0,
         elif ch == "\n":   # real newline kept as a safety no-op since v1.5.6
             out.append("<br>")
             i += 1
+        elif any(raw.startswith(p, i) for p in URL_PREFIXES):   # v1.21.0: auto-link URLs -> new tab
+            end = raw.find(" ", i)
+            if end == -1:
+                end = n
+            url = raw[i:end]
+            out.append(f'<a class="lnk" href="{html.escape(url, quote=True)}" '
+                       f'target="_blank" rel="noopener noreferrer">{html.escape(url)}</a>')
+            i = end
         else:
             out.append(html.escape(ch))
             i += 1
@@ -1654,6 +1694,10 @@ def format_text(raw: str) -> str:
                  chained escapes never get swallowed into the previous word (v1.7.1).
       name:     leading "name:" prefix renders as a badge; the colon disappears
                  (the app adds this prefix itself - see README)
+      http(s):// / ftp(s)://  URLs written as their own word are auto-linked and open in
+                 a new tab; trailing sentence punctuation is trimmed off them. Inside `code`
+                 spans they stay literal, and an escape glued to one (\bhttp://...) bolds it
+                 as plain text - keep a space before the URL (v1.21.0).
     """
     out = []
     m = NAME_RE.match(raw)          # v1.6.0: name badge, colon hidden

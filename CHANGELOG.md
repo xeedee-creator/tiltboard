@@ -2,6 +2,12 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.0] - 2026-11-10
+
+### Added
+- Clickable links inside tilt text: a URL written as its own word (`http://`, `https://`, `ftp://`) now renders underlined in the current theme's accent color and opens in a **new browser tab** on click. One shared CSS rule serves all themes; no per-style files were touched.
+- The link is simply everything from the protocol marker up to just before the next space (or end of line) — no punctuation trimming, so `see https://example.com.` links through `.com.` including that trailing period. Inside ~~spans~~ a URL stops at the span's closing pair.
+
 ## [1.20.0] - 2026-11-10
 
 ### Fixed

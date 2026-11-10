@@ -31,6 +31,7 @@ A small escape set works inside the message box; everything you type is stored l
 | stacked, e.g. `\b\itext` | all prefixes stack on that one word (**bold+italic**), in written order; `\b\btext` = single bold   |
 | `` `snippet` ``          | **code** in backticks — literal text; only `\n` still breaks a line (format escapes ignored inside) |
 | `~~text~~`               | <s>struck-through</s> span between paired tildes — per-word escapes (`\b`, `\u`, `\i`) still work *inside* it (each formats its own word), and stacked prefixes written before the opening `~~` wrap the whole span; an unmatched `~~` keeps both tildes as-is |
+| a plain URL, e.g. `https://example.com` | a clickable link — underlined in the current theme's accent color, opens in a **new browser tab** on click (`http://`, `https://`, `ftp://`) |
 
 Notes:
 - **Name badge** - when *Name* in the settings box is not the default `User`, every post starts with `Name:`. On the board that prefix renders inside a small colored badge and the colon itself disappears; chat.txt still stores the plain `name: text` line, so nothing changes for readers of the file.
@@ -41,6 +42,7 @@ Notes:
 - The box starts at exactly **one line of text** (with its icons) and grows dynamically whenever a new line appears - typed or pasted. After posting the page reloads and the box is back to its one-line size.
 - **Enter posts the message, Shift+Enter inserts a new line** - handy for multi-line tilts without leaving the box.
 - An escape with nothing after it (e.g. a trailing `\b`), an unmatched backtick, and an unclosed `~~` (no closing pair) are all shown literally, not treated as markup — unless the escape is directly followed by a paired `~~span~~`, in which case it applies to the whole span (`\b~~text~~` → bold *and* struck through).
+- **Links** - a URL written as its own word is auto-linked and opens in a new tab. Everything from the protocol marker up to just before the next space (or end of line) becomes the link — no trimming, so `see https://example.com.` links all the way through `.com.` including that trailing period. Inside `` `code` `` spans URLs stay literal, and an escape glued directly in front of a URL (`\bhttp://…`) bolds it as plain text — keep a space before the URL.
 - All other characters render exactly as typed; anything HTML-like (`<script>`, quotes, …) is escaped automatically — the escapes above are the only way to influence rendering.
 
 ## Attachments
@@ -138,4 +140,4 @@ Tiltboard was created fully by an AI agent running in **LM Studio Bionic** — e
 - **Measured speed** (decode throughput from the November 2026 server logs, per-step `tg` samples): the Q8MTP build averaged a **median of ~14.5 t/s** (mean 34.3, unstable — half of all steps below 25 t/s) over ~328k tokens; the current MTP build holds a **stable median of ~57 t/s** (p25–p75: 43–72, peaks to 109) across ~950k tokens — roughly a 4× speedup that made long agent sessions practical.
 - **Memory / KV cache:** ~40K context (40960) with flash attention and a unified, fully GPU-resident KV cache. The K cache is quantized to Q4_0 while the V cache stays at full precision — an asymmetric setup that keeps the big context affordable in VRAM without the slowdown of double-quantizing both tensors. MTP speculative decoding is enabled (draft tokens 0–3 per step). Initial settings were a Q8_0 K/V pair at 16K context; they were swapped for this configuration to fix slow response times.
 - **Hardware:** NVIDIA GeForce RTX 4090, 24 GB VRAM (driver 621.01).
-- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v1.20.0 of 2026-11-10 — 39 released versions across six days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting), and development continues.
+- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v1.21.0 of 2026-11-10 — 40 released versions across six days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting, auto-linked URLs), and development continues.
