@@ -4,5 +4,6 @@
   "data_folder": "",
   "rows": 10,
   "columns": 3,
-  "style": "neon"
+  "style": "neon",
+  "slow_upload": 0
 }

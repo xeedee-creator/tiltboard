@@ -66,7 +66,7 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "1.18.2"
+VERSION = "1.22.0"
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
 NUM_COLORS = 10  # each stylesheet defines its own palette for data-c="0..9"
@@ -74,7 +74,7 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 
 
 def load_config() -> dict:
-    """Read host/port/data_folder/rows/columns/style from config.json with fallbacks.
+    """Read host/port/data_folder/rows/columns/style/slow_upload from config.json with fallbacks.
 
     data_folder: empty/missing -> <app>/data; relative values resolve against
     the app folder; absolute paths (incl. UNC \\server\\share) pass through.
@@ -118,23 +118,54 @@ def load_config() -> dict:
     rows = grid_value("rows", "max_tilts", DEFAULT_ROWS, MAX_ROWS)      # legacy max_tilts -> rows
     columns = grid_value("columns", None, DEFAULT_COLUMNS, MAX_COLUMNS)
     style = str(raw.get("style", "classic")).strip() or "classic"
+    low = raw.get("slow_upload", 0)                # v1.22.0: slow-network switch - absent/0 keeps the current upload path,
+    if isinstance(low, str):                       # 1 makes paperclip uploads slice small and retry patiently (client side only)
+        try: low = int(low.strip())                # tolerate "1"/"0" written as strings in config.json
+        except ValueError: low = None
+    if low not in (0, 1):                          # anything else is invalid -> normal mode, loudly so
+        log.warning("invalid 'slow_upload' in config.json; using 0")
+        low = 0
     return {"host": host, "port": port, "data_folder": data_folder,
-            "rows": rows, "columns": columns, "style": style}
+            "rows": rows, "columns": columns, "style": style, "slow_upload": low}
+
+
+def _bundled_config() -> str | None:
+    """Frozen builds carry a copy of the config.json used at build time -
+    tiltboard.spec ships it under bundled/ so a bare .exe on a fresh machine
+    starts from exactly those settings instead of plain defaults."""
+    bundled = getattr(sys, "_MEIPASS", None)
+    if not bundled:
+        return None
+    try:
+        with open(os.path.join(bundled, "bundled", "config.json"), encoding="utf-8") as f:
+            text = f.read()
+    except OSError:  # bundle missing (e.g. hand-built exe) -> plain defaults
+        return None
+    try:
+        json.loads(text)
+    except ValueError:  # corrupt bundle would brick first run -> refuse it loudly
+        log.warning("bundled config.json is unreadable; using built-in defaults")
+        return None
+    return text
 
 
 def ensure_default_config() -> None:
-    """A missing config.json is written out with every default so the first
-    run leaves an editable file behind next to the program. An existing one -
-    even a broken one - is never touched."""
+    """A missing config.json is written out so the first run leaves an editable
+    file behind next to the program. Frozen builds start from the config bundled
+    at build time, plain runs from every default. An existing one - even a broken
+    one - is never touched."""
     if os.path.isfile(CONFIG_PATH):
         return
-    payload = {"host": "0.0.0.0", "port": 8000, "data_folder": "",
-               "rows": DEFAULT_ROWS, "columns": DEFAULT_COLUMNS,
-               "style": "classic"}
+    text = _bundled_config()
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-            f.write("\n")
+            if text is None:  # unfrozen, or no usable bundle -> every default
+                payload = {"host": "0.0.0.0", "port": 8000, "data_folder": "",
+                           "rows": DEFAULT_ROWS, "columns": DEFAULT_COLUMNS,
+                           "style": "classic", "slow_upload": 0}
+                json.dump(payload, f, indent=2)
+            else:
+                f.write(text)
         log.info("no config.json found; wrote %r with defaults", CONFIG_PATH)
     except OSError as e:  # read-only install dir -> run on pure defaults anyway
         log.warning("could not create config.json (%s); using built-in defaults", e)
@@ -149,9 +180,9 @@ if not os.path.isfile(CHAT_PATH):  # v1.16.x: first run leaves an empty board fi
     except OSError as e:  # read-only install dir -> restore_chat swallows it at startup anyway
         log.warning("could not create chat.txt (%s); board starts empty in memory", e)
 CONFIG = load_config()
-HOST, PORT, DATA_FOLDER, ROWS, COLUMNS = (CONFIG["host"], CONFIG["port"],
-                                          CONFIG["data_folder"], CONFIG["rows"],
-                                          CONFIG["columns"])
+HOST, PORT, DATA_FOLDER, ROWS, COLUMNS, SLOW_UPLOAD = (CONFIG["host"], CONFIG["port"],
+                                            CONFIG["data_folder"], CONFIG["rows"],
+                                            CONFIG["columns"], CONFIG["slow_upload"])
 PAGE_SIZE = ROWS * COLUMNS  # default page size; visitors may override via cookie
 
 try:  # a configured folder that cannot be created should be loud, not hidden
@@ -434,7 +465,8 @@ __ARROWS_BOTTOM__
 
 <script>window.DEFAULT_STYLE = "__DEFAULT_STYLE__";
 window.DEFAULT_ROWS = __DEFAULT_ROWS__;
-window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
+window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;
+window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
 <script>
 // Settings live in a browser cookie - the server never sees them.
 (function () {
@@ -558,6 +590,7 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
   let pendingFiles = [];                  // v1.18.0: { file, source } - posting order is array order
   const DROP_MAX = 256 * 1024 * 1024;     // drops/pastes stay on the direct path up to this, then suggest the clip icon
   const CHUNK_SIZE = 8 * 1024 * 1024;     // slice size for chunked uploads (paperclip always chunks)
+  const SLOW_CHUNK = window.SLOW_UPLOAD ? 256 * 1024 : CHUNK_SIZE; // v1.22.0: small slices when config.json says slow_upload
   const CLIP_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>';
 
   // v1.16.x: progress overlay over the text box - fill grows with uploaded bytes,
@@ -745,6 +778,13 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
         catch (err) { if (attempt > 3) throw new Error(lbl + " failed after 4 tries: " + err.message); await new Promise((w) => setTimeout(w, 2000 * attempt)); }
       }
     };
+    // v1.22.0: slow_upload mode - a chunk that fails is simply retried at the SAME offset every ~30 s
+    // (the server seeks to X-Chunk-Offset and overwrites, so repeating it can never duplicate bytes),
+    // until it lands or the visitor closes the tab; no give-up count. Normal mode keeps withRetry.
+    const slowStep = async (lbl, task) => {
+      for (; ; ) { try { return await task(); } catch { await new Promise((w) => setTimeout(w, 30000)); } }
+    };
+    const step = window.SLOW_UPLOAD ? slowStep : withRetry;  // v1.22.0: only the chunk loop swaps to this
     const sendFile = (i, file, source, line) => {
       if (source === "clip") {              // v1.16.2: paperclip always chunks - retry-safe for any size
         let stored = null;                  // kept in outer scope so the catch below can abort it by name
@@ -753,11 +793,11 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
             if (!res.ok || !res.stored) throw new Error(res.error || "could not reserve a file name");
             stored = res.stored;
             showUpload(file.name + label(), 0, file.size);   // v1.16.x: overlay appears as soon as the transfer starts
-            for (let off = 0; off < file.size; off += CHUNK_SIZE) {   // ~8 MB slices; the server streams each one to disk in 1 MB reads
-              await withRetry("chunk " + Math.round(off / CHUNK_SIZE + 1), () =>
-                fetch("/upload/chunk", { method: "POST", headers: { "X-Stored-Name": stored, "X-Chunk-Offset": String(off) }, body: file.slice(off, Math.min(off + CHUNK_SIZE, file.size)) })
+            for (let off = 0; off < file.size; off += SLOW_CHUNK) {   // ~8 MB slices normally, ~256 kB in slow_upload mode; server streams to disk in 1 MB reads
+              await step("chunk " + Math.round(off / SLOW_CHUNK + 1), () =>    // v1.22.0: slowStep (30 s cadence) when SLOW_UPLOAD, withRetry otherwise
+                fetch("/upload/chunk", { method: "POST", headers: { "X-Stored-Name": stored, "X-Chunk-Offset": String(off) }, body: file.slice(off, Math.min(off + SLOW_CHUNK, file.size)) })
                   .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); }));
-              showUpload(file.name + label(), off + CHUNK_SIZE, file.size);   // v1.16.x: advance the bar after each successful slice
+              showUpload(file.name + label(), off + SLOW_CHUNK, file.size);   // v1.16.x: advance the bar after each successful slice
             }
             return withRetry("commit", () => postJson("/post", { message: line, attach_stored: stored }));  // commit = same line format as a normal attachment post
           })
@@ -866,13 +906,16 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
       } else if (ch === "\n") { parent.appendChild(document.createElement("br")); i++; }
       else {
         // v1.21.0: auto-link URLs - lockstep with _fmt_loop(): find a known protocol
-        // marker at this position, then copy everything up to the next space (or the
-        // stop-bounded end of the line) as the href.
+        // marker at this position, then copy everything up to the next space or backslash
+        // (v1.21.1: so an escape like \n right after it is honoured) or the stop-bounded
+        // end of the line - whichever comes first.
         let url = null;
         for (const p of ["http://", "https://", "ftp://"]) {
           if (text.startsWith(p, i)) {
-            const sp = text.indexOf(" ", i);
-            url = (sp === -1 || sp > n) ? text.slice(i, n) : text.slice(i, sp);
+            let endU = text.indexOf(" ", i);                    // v1.21.1: space or backslash
+            const bsU = text.indexOf("\\", i);                  // terminates the href so a glued \n escape still works
+            if (bsU !== -1 && (endU === -1 || bsU < endU)) endU = bsU;
+            url = (endU === -1 || endU > n) ? text.slice(i, n) : text.slice(i, endU);
             break;
           }
         }
@@ -1186,22 +1229,31 @@ window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;</script>
   const msg = document.getElementById("message");
   if (!btn || !pick || !msg) return;
 
-  // Curated grid (~90 emoji). \u{...} escapes keep the source free of raw emoji.
+  // Curated grid (~135 emoji). \u{...} escapes keep the source free of raw emoji.
+  // FE0F (variation selector) is appended to text-default symbols so they always
+  // render as color glyphs - without it browsers may show a plain monochrome char.
   const EMOJIS = [
     "\u{1F600}","\u{1F602}","\u{1F603}","\u{1F604}","\u{1F605}","\u{1F606}","\u{1F923}","\u{1F609}",
     "\u{1F60A}","\u{1F60B}","\u{1F642}","\u{1F60C}","\u{1F917}","\u{1F920}","\u{1F633}",
-    "\u{1F970}","\u{1F625}","\u{1F62D}","\u{1F61E}","\u{1F61C}","\u{1F628}","\u{1F60F}",
-    "\u{1F914}","\u{1F91D}","\u{1F924}","\u{1F634}","\u{1F629}","\u{1F631}","\u{1F97A}",
-    "\u{1F60D}","\u{1F61A}","\u{1F61B}","\u{1F622}","\u{1F62E}","\u{1F975}","\u{1F644}",
-    "\u{1F90A}","\u{1F90D}","\u{1F636}","\u{1F648}","\u{1F64B}","\u{2764}","\u{1F495}",
-    "\u{1F49A}","\u{1F49D}","\u{270C}","\u{1F596}","\u{1F44C}","\u{1F44D}","\u{1F44E}","\u{1F91F}",
-    "\u{1F918}","\u{270B}","\u{1F64F}","\u{1F4AA}","\u{1F4AF}","\u{1FAF5}","\u{1F91C}","\u{1F64C}","\u{1F389}","\u{1F38A}",
-    "\u{2728}","\u{1F4AC}","\u{1F525}","\u{1F60E}","\u{1F913}","\u{1F9D0}","\u{1F928}",
-    "\u{1F431}","\u{1F432}","\u{1F98A}","\u{1F436}","\u{1F43B}","\u{1F99B}","\u{1F98E}",
-    "\u{1F42D}","\u{1F407}","\u{1F986}","\u{1F9A1}","\u{1F43E}","\u{1F43F}","\u{1F427}",
-    "\u{1F95D}","\u{1F98B}","\u{1F430}","\u{1F41A}","\u{1F43C}","\u{2615}","\u{1F37D}",
-    "\u{1F354}","\u{1F951}","\u{1F95A}","\u{1F36B}","\u{274C}",
-    "\u{2705}","\u{274E}","\u{1F382}","\u{1F9E8}","\u{26BD}","\u{1F3C0}"
+    "\u{1F601}","\u{1F929}","\u{1F92A}","\u{1F92D}","\u{1FAE3}","\u{1F92E}","\u{1F973}","\u{1F624}",
+    "\u{1F625}","\u{1F62D}","\u{1F61E}","\u{1F61C}","\u{1F628}","\u{1F60F}","\u{1F914}",
+    "\u{1F91D}","\u{1F924}","\u{1F634}","\u{1F629}","\u{1F631}","\u{1F97A}","\u{1F60D}",
+    "\u{1F61A}","\u{1F61B}","\u{1F622}","\u{1F62E}","\u{1F975}","\u{1F644}",
+    "\u{1F90D}","\u{1F636}","\u{1F648}","\u{1F64B}","\u{2764}\uFE0F","\u{1F495}","\u{1F4A0}",
+    "\u{1F494}","\u{1F49A}","\u{1F49D}","\u{270C}","\u{1F596}","\u{1F44C}","\u{1F44D}",
+    "\u{1F44E}","\u{1F91F}","\u{1F918}","\u{270B}","\u{1FAF0}","\u{1F919}","\u{1F64F}","\u{1F4AA}","\u{1F4AF}",
+    "\u{1FAF5}","\u{1F91C}","\u{1F64C}","\u{1F389}","\u{1F38A}","\u{2728}","\u{1F4AC}",
+    "\u{1F525}","\u{1F60E}","\u{1F913}","\u{1F9D0}","\u{1F928}","\u{1F47A}","\u{1F47B}",
+    "\u{1F47D}","\u{2620}\uFE0F","\u{1F4A9}","\u{1F431}","\u{1F432}","\u{1F98A}","\u{1F436}",
+    "\u{1F43B}","\u{1F9BF}\uFE0F","\u{1F99B}","\u{1F98E}","\u{1F42D}","\u{1F407}","\u{1F986}","\u{1F9D9}","\u{1F9A1}",
+    "\u{1F43E}","\u{1F43F}","\u{1F427}","\u{1F437}","\u{1F41F}","\u{1F95D}","\u{1F98B}",
+    "\u{1F430}","\u{1F41A}","\u{1F43C}","\u{2615}","\u{1F37D}\uFE0F","\u{1F37E}","\u{1F37A}",
+    "\u{1F37B}","\u{1F354}","\u{1F951}","\u{1F95A}","\u{1F36B}","\u{1F490}","\u{274C}","\u{27A4}\uFE0F",
+    "\u{2705}","\u{274E}","\u{1F382}","\u{1F9E8}","\u{26BD}","\u{1F3C0}","\u{1F440}",
+    "\u{1F30D}","\u{1F3ED}","\u{1F6A6}","\u{1F6D1}","\u{2794}\uFE0F","\u{25CB}\uFE0F",
+    "\u{25CF}\uFE0F","\u{1F31E}","\u{1F308}","\u{26A1}","\u{2744}\uFE0F","\u{1F384}",
+    "\u{1F5A5}\uFE0F","\u{1F50D}","\u{1F4C4}","\u{2709}\uFE0F","\u{2699}\uFE0F",
+    "\u{1F6AC}","\u{2622}\uFE0F"
   ];
 
   for (const e of EMOJIS) {
@@ -1666,7 +1718,12 @@ def _fmt_loop(raw: str, start: int, out: list, depth: int = 0,
             out.append("<br>")
             i += 1
         elif any(raw.startswith(p, i) for p in URL_PREFIXES):   # v1.21.0: auto-link URLs -> new tab
+            # v1.21.1: the href ends at a space, a backslash (so an escape like \n right
+            # after it is honoured as its own sequence), or end-of-line - whichever comes first.
             end = raw.find(" ", i)
+            bs = raw.find("\\", i)
+            if bs != -1 and (end == -1 or bs < end):
+                end = bs
             if end == -1:
                 end = n
             url = raw[i:end]
@@ -1695,9 +1752,10 @@ def format_text(raw: str) -> str:
       name:     leading "name:" prefix renders as a badge; the colon disappears
                  (the app adds this prefix itself - see README)
       http(s):// / ftp(s)://  URLs written as their own word are auto-linked and open in
-                 a new tab; trailing sentence punctuation is trimmed off them. Inside `code`
-                 spans they stay literal, and an escape glued to one (\bhttp://...) bolds it
-                 as plain text - keep a space before the URL (v1.21.0).
+                 a new tab; the link ends at a space, a backslash or end-of-line - so an escape
+                 glued right after (http://my_domain\n...) is honoured. Inside `code` spans they
+                 stay literal, and an escape glued to one (\bhttp://...) bolds it as plain text -
+                 keep a space before the URL (v1.21.0/v1.21.1).
     """
     out = []
     m = NAME_RE.match(raw)          # v1.6.0: name badge, colon hidden
@@ -1793,7 +1851,8 @@ class Handler(BaseHTTPRequestHandler):
             page = (page.replace("__HEADER__", _header_html())           # optional top frame
                     .replace("__DEFAULT_STYLE__", STYLE_NAME)      # dropdown default
                     .replace("__DEFAULT_ROWS__", str(ROWS))
-                    .replace("__DEFAULT_COLUMNS__", str(COLUMNS)))
+                    .replace("__DEFAULT_COLUMNS__", str(COLUMNS))
+                    .replace("__SLOW_UPLOAD__", str(SLOW_UPLOAD)))       # v1.22.0: slow-network upload switch
             body = page.encode("utf-8")
             # v1.18.1: no-store - the grid (rows/cols) and all settings logic live in this
             # document's inline JS, so a heuristically cached copy would silently ignore the

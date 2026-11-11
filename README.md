@@ -30,8 +30,8 @@ A small escape set works inside the message box; everything you type is stored l
 | `\iword`                 | *italic* word (same rule)                                                                           |
 | stacked, e.g. `\b\itext` | all prefixes stack on that one word (**bold+italic**), in written order; `\b\btext` = single bold   |
 | `` `snippet` ``          | **code** in backticks — literal text; only `\n` still breaks a line (format escapes ignored inside) |
-| `~~text~~`               | <s>struck-through</s> span between paired tildes — per-word escapes (`\b`, `\u`, `\i`) still work *inside* it (each formats its own word), and stacked prefixes written before the opening `~~` wrap the whole span; an unmatched `~~` keeps both tildes as-is |
-| a plain URL, e.g. `https://example.com` | a clickable link — underlined in the current theme's accent color, opens in a **new browser tab** on click (`http://`, `https://`, `ftp://`) |
+| `~~text~~`               | <s>struck-through</s> span between paired tildes (see **Strikethrough**)                            |
+| a plain URL              | clickable link — opens in a new tab (`http://`, `https://`, `ftp://`; see **Links**)                |
 
 Notes:
 - **Name badge** - when *Name* in the settings box is not the default `User`, every post starts with `Name:`. On the board that prefix renders inside a small colored badge and the colon itself disappears; chat.txt still stores the plain `name: text` line, so nothing changes for readers of the file.
@@ -42,7 +42,8 @@ Notes:
 - The box starts at exactly **one line of text** (with its icons) and grows dynamically whenever a new line appears - typed or pasted. After posting the page reloads and the box is back to its one-line size.
 - **Enter posts the message, Shift+Enter inserts a new line** - handy for multi-line tilts without leaving the box.
 - An escape with nothing after it (e.g. a trailing `\b`), an unmatched backtick, and an unclosed `~~` (no closing pair) are all shown literally, not treated as markup — unless the escape is directly followed by a paired `~~span~~`, in which case it applies to the whole span (`\b~~text~~` → bold *and* struck through).
-- **Links** - a URL written as its own word is auto-linked and opens in a new tab. Everything from the protocol marker up to just before the next space (or end of line) becomes the link — no trimming, so `see https://example.com.` links all the way through `.com.` including that trailing period. Inside `` `code` `` spans URLs stay literal, and an escape glued directly in front of a URL (`\bhttp://…`) bolds it as plain text — keep a space before the URL.
+- **Strikethrough** - `~~text~~` strikes everything between the paired tildes; per-word escapes (`\b`, `\u`, `\i`) still work *inside* the span (each formats its own word), and stacked prefixes written before the opening `~~` wrap the whole span (`\b~~text~~` → bold *and* struck through). An unmatched `~~` keeps both tildes as-is.
+- **Links** - a URL written as its own word is auto-linked and opens in a new tab. The link runs from the protocol marker to just before the next space, backslash or end-of-line (whichever comes first) — no trimming, so `see https://example.com.` still includes that trailing period, while an escape glued right after it (`http://my_domain\n…`) is honoured as a line break instead of being swallowed into the link. Inside `` `code` `` spans URLs stay literal, and an escape glued directly in front of a URL (`\bhttp://…`) bolds it as plain text — keep a space before the URL.
 - All other characters render exactly as typed; anything HTML-like (`<script>`, quotes, …) is escaped automatically — the escapes above are the only way to influence rendering.
 
 ## Attachments
@@ -115,10 +116,13 @@ Both run modes also write an application log to **tiltboard.log** next to the ap
 | `style`       | theme name — any file in `styles/`; default when no visitor preference (cookie) exists         | `classic`                        |
 | `rows`        | card **rows** filling one board page; 1–1000                                                   | `35`                             |
 | `columns`     | cards **side by side** in each row; 1–100                                                      | `1`                              |
+| `slow_upload` | slow-network upload switch; paperclip uploads slice ~256 kB, failed chunks retry every ~30 s   | `0`                              |
 
 Out-of-range or non-numeric grid values fall back to the defaults (a warning is printed at startup). Pre-1.7.0 configs keep working: a legacy `max_tilts` key is read as `rows`.
 
 **Windows paths.** A full path must double every backslash — `"D:\\Data\\Share\\"` — because a single `\D`, `\i`, … would be an invalid JSON escape and the file stops parsing. Forward slashes need no escaping at all (`"D:/Data/Share/"`) and work equally well; either form is fine.
+
+**Slow uploads (`slow_upload`).** With the key absent or `0`, everything behaves exactly as before. Set to `1` on a machine whose uploads routinely drop mid-transfer: every paperclip upload then slices at ~256 kB instead of 8 MB (the progress bar simply updates more often), and any chunk that fails is retried at its own byte offset about every 30 seconds — the server seeks to that exact position, so repeating a chunk can never duplicate bytes — until it lands or the tab is closed; there is no give-up count. Direct drops/pastes (≤ 256 MB) and everything else are untouched.
 
 **Per-user override.** The gear icon's settings box offers *Rows* and *Columns* next to *Name* and *Style*. Saved values go into the visitor's browser cookie (`tiltboard`) and beat the config file; new visitors start from the config defaults. Changing the grid reloads the page, re-paginates at that user's own page size (rows × columns), and lays cards out row-major — newest top-left, filling right along each row, oldest of the page bottom-right — with the arrow pair kept for stepping through older pages client-side (no full reload).
 

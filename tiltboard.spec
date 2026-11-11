@@ -5,7 +5,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('styles', 'styles')],
+    datas=[('styles', 'styles'), ('config.json', 'bundled')],  # config shipped as the first-run template
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

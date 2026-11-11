@@ -2,6 +2,12 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.0] - 2026-11-10
+
+### Added
+- Slow-network upload resilience, switched on with a new `slow_upload` key in `config.json`. Absent or `0`, uploads behave exactly as before. Set to `1`, every paperclip upload slices at ~256 kB instead of 8 MB and treats each chunk independently: when one fails (network drop, server hiccup), the client waits about 30 seconds and re-sends that same chunk at its own byte offset — the server seeks to that exact position before writing, so repeating a chunk can never duplicate bytes — retrying every ~30 s until it lands or the tab is closed. There is no give-up count; the progress bar simply updates far more often on small slices.
+- Direct drops/pastes (≤ 256 MB) and all non-upload requests are untouched by this mode. The final commit step deliberately keeps its normal four-attempt limit: a dropped *commit* response could not be safely retried without risking a double-posted tilt, so it still aborts and restores the post.
+
 ## [1.21.0] - 2026-11-10
 
 ### Added
