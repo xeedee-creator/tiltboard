@@ -49,8 +49,16 @@ def _init_logging() -> logging.Logger:
     """Persistent app log: tiltboard.log next to the app (1 MB x 3 rotations) plus
     stdout so terminal/nohup captures keep working. Routine traffic stays quiet;
     errors and notable events are always recorded."""
+    debug = False  # v1.24.0: "debug": 1 in config.json switches the log to DEBUG level
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:   # CONFIG_PATH is defined above, before this runs
+            raw = json.load(f)
+        flag = str(raw.get("debug", 0)).strip()
+        debug = flag == "1" or flag.lower() in ("true", "yes")
+    except (OSError, ValueError):  # missing/broken config -> quiet INFO default
+        pass
     logger = logging.getLogger("tiltboard")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")
     try:
         file_handler = RotatingFileHandler(LOG_PATH, maxBytes=1_048_576,
@@ -66,7 +74,7 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "1.22.0"
+VERSION = "1.24.0"  # v1.24.0: debug logging - version caught up with CHANGELOG (rating shipped as 1.23.0)
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
 NUM_COLORS = 10  # each stylesheet defines its own palette for data-c="0..9"
@@ -162,7 +170,8 @@ def ensure_default_config() -> None:
             if text is None:  # unfrozen, or no usable bundle -> every default
                 payload = {"host": "0.0.0.0", "port": 8000, "data_folder": "",
                            "rows": DEFAULT_ROWS, "columns": DEFAULT_COLUMNS,
-                           "style": "classic", "slow_upload": 0}
+                           "style": "classic", "slow_upload": 0,
+                           "debug": 0}
                 json.dump(payload, f, indent=2)
             else:
                 f.write(text)
@@ -226,6 +235,11 @@ STYLES_JSON = json.dumps(available_styles()).encode("utf-8")
 # one-line-one-tilt contract). The regex only matches a final token.
 ATTACH_RE = re.compile(r"\s+(file://\S+)$")
 
+# v1.23.0: a tilt line may end "Name: text::a:b:c:d file://..." - the rating
+# suffix sits between the display text and any attachment tail. Position 1 is
+# the thumbs-up count, then thumbs-down, heart, smiley.
+RATING_RE = re.compile(r"::(\d+):(\d+):(\d+):(\d+)$")
+
 
 def split_line(line: str) -> tuple[str, str | None]:
     """Split a chat.txt line into (display text, attachment path or None)."""
@@ -275,7 +289,12 @@ def restore_posts() -> None:
     for line in lines:
         text, path = split_line(line)
         attach = describe_attach(path) if path else None
-        POSTS.append(_new_post(text, attach))
+        post = _new_post(text, attach)
+        m = RATING_RE.search(text)  # v1.23.0: peel the rating tail off the display text
+        if m:
+            post["text"] = text[:m.start()].rstrip()
+            post["rating"] = [int(g) for g in m.groups()]
+        POSTS.append(post)
 
 
 def persist_text(text: str, stored_name: str | None = None) -> None:
@@ -301,6 +320,14 @@ def add_post(text: str, stored_name: str | None = None) -> None:
     snippet = text.replace("\n", " ")[:60]  # one-line digest; escapes stay readable
     log.info("tilt posted: %s%s", snippet,
              f" (attachment {stored_name})" if stored_name else "")
+    if log.isEnabledFor(logging.DEBUG):  # v1.24.0: extended logging - which chat.txt line this post became
+        try:
+            with open(CHAT_PATH, encoding="utf-8") as f:
+                total = sum(1 for _ in f)
+        except OSError:
+            total = -1
+        log.debug("action=post text=%r attach=%s -> appended as chat.txt line %d of %d",
+                  snippet, stored_name or "-", total, max(total, 1))
 
 
 def describe_attach(local_path: str | None) -> dict | None:
@@ -989,10 +1016,32 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
       del.textContent = "\u2715";  // U+2715, same glyph as &#10005; in the server HTML
       div.dataset.text = post.text;
       div.dataset.attach = post.attach ? post.attach.name : "";
+      // v1.23.0: rating row - same structure the server HTML emits
+      const rate = document.createElement("span");
+      rate.className = "rate";
+      const counts = Array.isArray(post.rating) ? post.rating : [0, 0, 0, 0];
+      [["up", "\u{1F44D}", "Rate up"], ["down", "\u{1F44E}", "Rate down"],
+       ["heart", "\u2764\uFE0F", "Love it"], ["smile", "\u{1F600}", "Funny"]]
+        .forEach(([name, glyph, title], k) => {
+          const b = document.createElement("button");
+          b.className = "rate-btn";
+          b.dataset.icon = name;
+          b.title = title;
+          b.textContent = glyph;
+          if (counts[k] > 0) {  // zero counts render no badge, same as the server HTML
+            const c = document.createElement("b");
+            c.textContent = String(counts[k]);
+            b.appendChild(c);
+          }
+          rate.appendChild(b);
+        });
+      div.appendChild(rate);
       div.appendChild(del);
       frag.appendChild(div);
     }
     board.replaceChildren(frag);
+    markRated();  // v1.23.0 fix: re-apply vote marks AFTER the swap - marking the
+                  // old DOM before replaceChildren was a no-op (re-rate bug)
   }
 
   // v1.7.0: per-visitor board grid - this user's own rows x columns decides
@@ -1085,6 +1134,9 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
     poll();
   });
 
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) { lastSig = ""; poll(); }  // throttled background tab caught up on focus
+  });
   poll();
   setInterval(poll, 3000);
   window.tiltRender = render;                       // v1.14.0: shared by the search filter
@@ -1213,10 +1265,46 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
       .catch(() => alert("Delete failed - could not reach the server."));
   });
 
+  // v1.23.0: one vote per visitor per tilt - localStorage is the simple
+  // method; clearing browser cache re-allows rating, exactly as intended.
+  function rateFp(card) { return "rated:" + card.dataset.text + "|" + (card.dataset.attach || ""); }
+  function markRated() {
+    for (const card of document.querySelectorAll(".tilt")) {
+      if (!localStorage.getItem(rateFp(card))) continue;
+      for (const b of card.querySelectorAll(".rate-btn")) b.classList.add("rated");
+    }
+  }
+  window.markRated = markRated;  // v1.23.0 fix: render() in the poller script re-applies vote
+                                 // marks on every re-render - it needs cross-script reach
+  function rateTilt(btn) {
+    const card = btn.closest(".tilt");
+    fetch("/rate", { method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text: card.dataset.text,
+                                           attach: card.dataset.attach || null,
+                                           icon: btn.dataset.icon }) })
+      .then((r) => r.json().catch(() => ({})))
+      .then((res) => {
+        if (!res || !res.ok) { alert("Rating failed: " + ((res && res.error) || "unknown error")); return; }
+        localStorage.setItem(rateFp(card), "1");  // remember this visitor's vote
+        const counts = Array.isArray(res.rating) ? res.rating : [0, 0, 0, 0];
+        card.querySelectorAll(".rate-btn").forEach((b, k) => {  // update in place - no reload,
+          b.classList.add("rated");                            // scroll position is kept
+          let badge = b.querySelector("b");
+          if (counts[k] > 0) {
+            if (!badge) badge = document.createElement("b"), b.appendChild(badge);
+            badge.textContent = String(counts[k]);
+          } else if (badge) badge.remove();
+        });
+      })
+      .catch(() => alert("Rating failed - could not reach the server."));
+  }
   // One listener for every card on the board, live-polled or server-rendered.
   document.getElementById("board").addEventListener("click", (e) => {
-    const btn = e.target.closest && e.target.closest(".tilt .del");
-    if (btn) openDialog(btn.closest(".tilt"));
+    const del = e.target.closest && e.target.closest(".tilt .del");
+    if (del) { openDialog(del.closest(".tilt")); return; }
+    const rb = e.target.closest && e.target.closest(".tilt .rate-btn");
+    if (rb && !rb.classList.contains("rated")) rateTilt(rb);
   });
 })();
 </script>
@@ -1362,6 +1450,16 @@ button#emojiBtn, button#attachBtn, button#post { height: 42px; }
 .attach-img .dl { position: absolute; right: 6px; bottom: 6px; opacity: 0; transition: opacity .15s;
   text-decoration: none; font-size: 14px; line-height: 1; padding: 3px 7px; border-radius: 6px; }
 .attach-img:hover .dl, .attach-img:focus-within .dl { opacity: 1; }
+/* tilt rating (v1.23.0) - a small always-visible row just left of the
+   delete cross; counts are shared content so they never hide on hover-out.
+   Structure here, theme visuals in the stylesheets. */
+.rate { position: absolute; top: 4px; right: 36px; z-index: 2; display: flex; gap: 1px; }
+.rate-btn { border: none; background: transparent; cursor: pointer; font-size: 13px;
+  line-height: 1; padding: 3px 4px; border-radius: 8px; opacity: .55;
+  transition: opacity .15s, transform .15s; }
+.rate-btn:hover { opacity: 1; transform: scale(1.2); }
+.rate-btn b { font-size: 9px; font-weight: 700; margin-left: 1px; vertical-align: top; }
+.rate-btn.rated { opacity: .3; pointer-events: none; }  /* this visitor already voted */
 /* tilt delete (v1.5.4) - structure here, theme visuals in the stylesheets */
 .tilt { position: relative; transition: transform .15s ease; }  /* v1.8.0: hover zoom */
 .tilt .del { position: absolute; top: 6px; right: 8px; z-index: 2; width: 22px; height: 22px;
@@ -1792,12 +1890,23 @@ def render_posts(page: int = 1) -> str:
             else:
                 extra = (f'<a class="download" href="{html.escape(attach["url"])}">'
                          f'\U0001F4C4 {html.escape(attach["name"])}</a>')
+        # v1.23.0: rating row, always visible (counts are shared content),
+        # positioned just left of the delete cross - structure here, theme
+        # visuals in the stylesheets; zero counts render no badge at all.
+        counts = post.get("rating") or [0, 0, 0, 0]
+        rate_icons = (("up", "\U0001F44D", "Rate up"), ("down", "\U0001F44E", "Rate down"),
+                      ("heart", "\u2764\uFE0F", "Love it"), ("smile", "\U0001F600", "Funny"))
+        rate_btns = " ".join(
+            f'<button class="rate-btn" data-icon="{name}" title="{title}">{glyph}'
+            + (f"<b>{c}</b>" if c else "") + "</button>"
+            for (name, glyph, title), c in zip(rate_icons, counts))
+        rate_row = f'<span class="rate">{rate_btns}</span>'
         # the button's identity rides on data-* so one click handler can serve
         # every card - quote=True keeps quotes/newlines inside the attribute
         attach_name = html.escape(attach["name"], quote=True) if attach else ""
         cards.append(f'<div class="tilt{emoji_cls}" data-c="{post["color"]}" style="--tilt: {tilt} "'
                      f'data-text="{html.escape(post["text"], quote=True)}"'
-                     f'data-attach="{attach_name}">{delete_btn}'
+                     f'data-attach="{attach_name}">{rate_row}{delete_btn}'
                      f'<span class="text">{text}</span>{extra}</div>')
     return "\n".join(cards)
 
@@ -1922,8 +2031,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/delete":
+        if parsed.path == "/delete":    # v1.5.4: remove one tilt + its source file
             self._handle_delete()
+            return
+        if parsed.path == "/rate":      # v1.23.0: tilt rating, one vote per visitor
+            self._handle_rate()
             return
         if parsed.path == "/upload/init":       # v1.16.0: chunked upload of big attachments - streamed, constant RAM
             self._upload_init()
@@ -1988,7 +2100,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"ok": False, "error": "unknown upload"}).encode())
             return
         try:
-            remaining = int(self.headers.get("Content-Length", 0))
+            total = int(self.headers.get("Content-Length", 0))  # v1.24.0: remember for the debug log
+            remaining = total
             offset = int(self.headers.get("X-Chunk-Offset", -1))
             # v1.16.1: with X-Chunk-Offset the write is idempotent - seek to this chunk's own byte
             # offset instead of appending, so a retried request after a dropped connection can never
@@ -2007,6 +2120,13 @@ class Handler(BaseHTTPRequestHandler):
             log.warning("chunked upload failed: %s", e)
             self._send(500, json.dumps({"ok": False, "error": str(e)}).encode())
             return
+        if log.isEnabledFor(logging.DEBUG):  # v1.24.0: extended logging - which chunk landed on disk
+            try:
+                size = os.path.getsize(real)
+            except OSError:
+                size = -1
+            log.debug("action=upload/chunk stored=%s offset=%d wrote=%d bytes file-size=%d",
+                      self.headers.get("X-Stored-Name"), offset, total - remaining, size)
         self._send(200, json.dumps({"ok": True}).encode())
 
     def _upload_abort(self):
@@ -2017,6 +2137,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             self._send(400, json.dumps({"ok": False, "error": "bad request"}).encode())
             return
+        log.debug("action=upload/abort stored=%r", req.get("stored"))  # v1.24.0: extended logging
         real = _stored_path(req.get("stored")) if isinstance(req.get("stored"), str) else None
         if real and os.path.isfile(real):
             try:
@@ -2046,6 +2167,7 @@ class Handler(BaseHTTPRequestHandler):
         if not idx:
             self._send(404, json.dumps({"ok": False, "error": "tilt not found"}).encode())
             return
+        log.debug("action=delete text=%r attach=%s", text[:80], attach_name)  # v1.24.0: extended logging
         removed_file = False
         try:
             with open(CHAT_PATH, encoding="utf-8") as f:
@@ -2078,9 +2200,71 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # memory is only a cache; chat.txt is the source of truth
             pass
         snippet = text.replace("\n", " ")[:60]
-        log.info("tilt deleted: %s%s", snippet,
+        log.info("tilt deleted (chat.txt line %d): %s%s", idx, snippet,
                  f" (source file {attach_name} removed)" if removed_file else "")
         self._send(200, json.dumps({"ok": True, "removed_file": removed_file}).encode(),
+                   {"Content-Type": "application/json"})
+
+    def _handle_rate(self):
+        """POST /rate - add one vote (up/down/heart/smile) to a tilt.
+
+        The client sends the exact text plus the attachment's stored name or
+        null, like /delete. find_post_line() re-reads chat.txt fresh and skips
+        rating tails when comparing identity, so rated lines still match. The
+        "::a:b:c:d" tail is rebuilt between the display text and any file://
+        token; bytes from the attachment marker onward are preserved verbatim.
+        A brand-new line gets "::0:0:0:0" with just the clicked icon bumped,
+        so the four counts always exist after the first rating.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+            text, name = str(req.get("text", "")), req.get("attach")
+            attach_name = name if isinstance(name, str) and name else None
+        except (ValueError, UnicodeDecodeError):
+            self._send(400, json.dumps({"ok": False, "error": "bad request"}).encode())
+            return
+        log.debug("action=rate icon=%s text=%r attach=%s",
+                  req.get("icon", "?"), text[:80], attach_name)  # v1.24.0: extended logging
+        icon_idx = {"up": 0, "down": 1, "heart": 2, "smile": 3}.get(req.get("icon", ""))
+        if icon_idx is None:
+            self._send(400, json.dumps({"ok": False, "error": "bad request"}).encode())
+            return
+        idx = find_post_line(text, attach_name)
+        if not idx:
+            self._send(404, json.dumps({"ok": False, "error": "tilt not found"}).encode())
+            return
+        try:
+            with open(CHAT_PATH, encoding="utf-8") as f:
+                lines = [ln.rstrip("\n") for ln in f]
+            raw = lines[idx - 1]
+            m = ATTACH_RE.search(raw)          # keep the attachment tail byte-for-byte
+            base = (raw[:m.start()] if m else raw).rstrip()
+            counts = [0, 0, 0, 0]
+            rm = RATING_RE.search(base)
+            if rm:
+                counts = [int(g) for g in rm.groups()]
+                base = base[:rm.start()].rstrip()
+            counts[icon_idx] += 1
+            lines[idx - 1] = (f"{base}::{counts[0]}:{counts[1]}:{counts[2]}:{counts[3]}"
+                              + (raw[m.start():] if m else ""))
+            with open(CHAT_PATH, "w", encoding="utf-8") as f:
+                for ln in lines:  # every other line is preserved byte-for-byte
+                    if ln.strip():
+                        f.write(ln + "\n")
+        except OSError as e:
+            self._send(500, json.dumps({"ok": False, "error": str(e)}).encode())
+            return
+        try:  # keep the in-memory store consistent until the page reloads
+            for p in POSTS:
+                if p["text"] == text and (not attach_name or
+                        (p.get("attach") and p["attach"]["name"] == attach_name)):
+                    p["rating"] = counts
+                    break
+        except Exception:  # memory is only a cache; chat.txt is the source of truth
+            pass
+        log.info("tilt rated %s (chat.txt line %d): %d:%d:%d:%d", req.get("icon", "?"), idx, *counts)
+        self._send(200, json.dumps({"ok": True, "rating": counts}).encode(),
                    {"Content-Type": "application/json"})
 
     def log_message(self, fmt, *args):  # route stdlib access logging into tiltboard.log
@@ -2116,15 +2300,20 @@ def find_post_line(text: str, attach_name: str | None) -> int:
         with open(CHAT_PATH, encoding="utf-8") as f:
             lines = [ln.rstrip("\n") for ln in f]
     except OSError:
+        log.debug("find_post_line unreadable chat.txt for text=%r", text[:80])  # v1.24.0: extended logging
         return 0
     for i, line in enumerate(lines):
         if not line.strip():
             continue
         t, path = split_line(line)
-        if t != text:
+        if RATING_RE.sub("", t) != text:  # v1.23.0: a rating tail must not break identity
             continue
         if attach_name is None or (path and os.path.basename(path) == attach_name):
+            log.debug("find_post_line matched chat.txt line %d of %d",
+                      i + 1, len(lines))  # v1.24.0: extended logging
             return i + 1
+    log.debug("find_post_line no match for text=%r attach=%s (%d lines)",
+              text[:80], attach_name, len(lines))  # v1.24.0: extended logging
     return 0
 
 

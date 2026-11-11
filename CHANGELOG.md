@@ -2,6 +2,20 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.0] - 2026-11-11
+
+### Added
+- Extended debug logging, switched on with a new `debug` key in `config.json`. Absent or `0`, the log stays as quiet as before (INFO and up). Set to `1` and `tiltboard.log` records every notable action with its parsed parameters: posts report which chat.txt line they became (`line N of M`), deletes and ratings name the exact chat.txt line they act on, upload aborts/chunks log stored name + offset + byte size, and identity lookups explain matches *and* misses (matched line X of Y / no match over N lines). Routine HTTP traffic is logged at DEBUG as well, so expect a busier log in this mode.
+- `ensure_default_config()` now seeds fresh installs with `"debug": 0` — existing config files are never touched. The app's own version constant catches up to the changelog (1.23.0 rating release had shipped without bumping it).
+
+## [1.23.0] - 2026-11-11
+
+### Added
+- Tilt rating: every card carries a small always-visible row of four icons (👍 👎 ❤ 😀) just left of the delete cross — counts are shared content, so they never hide on hover-out like the ✕ does. Clicking one sends `POST /rate` with the tilt's identity; the server appends or bumps a `::a:b:c:d` counter tail at the end of that line in `chat.txt`, between the display text and any attachment path (`Name: text::1:0:0:0 file://…`). A first rating creates `::1:0:0:0` — zero for the three unclicked icons — later clicks simply increase their own number. Counts survive restarts like everything else in chat.txt.
+- Counts render as tiny badges next to their icon, shown only when above zero — an unrated board stays clean. The badge updates in place on the server's response: no page reload, so scroll position is kept and you can keep rating other tilts (delete deliberately still does a full reload).
+- One vote per visitor, by the simple method: after a successful rating the browser stores the tilt's fingerprint (`data-text + "|" + data-attach`) in localStorage and dims all four buttons on that card for this visitor. Clearing the cache re-allows voting — exactly as intended.
+- Rated lines stay identity-stable everywhere: `find_post_line()` strips the rating tail before comparing text, so delete works unchanged on rated posts; search already runs over stripped display text restored from chat.txt at startup; server-rendered HTML and live-polled cards emit identical rating markup (same classes, same structure).
+
 ## [1.22.0] - 2026-11-10
 
 ### Added

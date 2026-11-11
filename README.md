@@ -14,7 +14,8 @@ A file share, a chat and a bulletin board on one page - with none of the usual c
 - **The whole history is one text file** - every post is one line in `chat.txt`, human-readable, diff-able and portable; restart the server and everything comes back.
 - **Share big files without thinking about it** - drag & drop or paste small ones straight onto the box; for anything over 256 MB attach with the paperclip and watch progress fill the text box while ~8 MB slices stream in the background.
 - **Find any old post instantly** - the search bar filters *all* of chat.txt live as you type, including `u:name`, `f:filename` and plain-text queries.
-- **Easy to make yours** - drop a `header.html` into the app folder for your own banner (logos, company name), pick one of seven built-in styles, or bring your own.
+- **React on any post** - every card carries four always-visible rating icons (👍 👎 ❤ 😀) left of the delete cross; one vote per visitor is remembered in localStorage until the cache is cleared, and counts live in chat.txt itself (`::a:b:c:d` tail on the line), so they survive restarts and are visible to everyone.
+- **Easy to make yours** - drop a `header.html` into the app folder for your own banner (logos, company name), pick one of nine built-in styles, or bring your own.
 
 Posted texts persist to `chat.txt` (one line per tilt, newest last) and are restored on restart — the file grows without bound; the board simply pages through it in row-major chunks of *Rows* × *Columns* cards. Tilt angle and color are re-rolled randomly each time.
 
@@ -117,6 +118,7 @@ Both run modes also write an application log to **tiltboard.log** next to the ap
 | `rows`        | card **rows** filling one board page; 1–1000                                                   | `35`                             |
 | `columns`     | cards **side by side** in each row; 1–100                                                      | `1`                              |
 | `slow_upload` | slow-network upload switch; paperclip uploads slice ~256 kB, failed chunks retry every ~30 s   | `0`                              |
+| `debug`       | extended logging switch; `1` logs every action with its parameters and chat.txt line indexes  | `0`                              |
 
 Out-of-range or non-numeric grid values fall back to the defaults (a warning is printed at startup). Pre-1.7.0 configs keep working: a legacy `max_tilts` key is read as `rows`.
 
@@ -138,10 +140,10 @@ Editing the file needs only a **browser refresh** — it is re-read on each page
 
 ## About this app
 
-Tiltboard was created fully by an AI agent running in **LM Studio Bionic** — every line of `app.py`, all seven theme stylesheets and both documentation files were written by the agent; a human only requested features, tested them and approved releases.
+Tiltboard was created fully by an AI agent running in **LM Studio Bionic** — every line of `app.py`, all nine theme stylesheets and both documentation files were written by the agent; a human only requested features, tested them and approved releases.
 
 - **Model:** `Qwen3.8-27B-Coder390-EfficientThink-Q4LynnStyle-MTP.gguf`, served by LM Studio's llama server with all layers on GPU (offload ratio 1). The earlier build (`...-Q4LynnStyle-Q8MTP.gguf`) was replaced because its responses were too slow.
 - **Measured speed** (decode throughput from the November 2026 server logs, per-step `tg` samples): the Q8MTP build averaged a **median of ~14.5 t/s** (mean 34.3, unstable — half of all steps below 25 t/s) over ~328k tokens; the current MTP build holds a **stable median of ~57 t/s** (p25–p75: 43–72, peaks to 109) across ~950k tokens — roughly a 4× speedup that made long agent sessions practical.
 - **Memory / KV cache:** ~40K context (40960) with flash attention and a unified, fully GPU-resident KV cache. The K cache is quantized to Q4_0 while the V cache stays at full precision — an asymmetric setup that keeps the big context affordable in VRAM without the slowdown of double-quantizing both tensors. MTP speculative decoding is enabled (draft tokens 0–3 per step). Initial settings were a Q8_0 K/V pair at 16K context; they were swapped for this configuration to fix slow response times.
 - **Hardware:** NVIDIA GeForce RTX 4090, 24 GB VRAM (driver 621.01).
-- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v1.21.0 of 2026-11-10 — 40 released versions across six days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting, auto-linked URLs), and development continues.
+- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v1.23.0 of 2026-11-11 — 42 released versions across seven days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting, auto-linked URLs, tilt rating), and development continues.
