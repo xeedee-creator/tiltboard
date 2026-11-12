@@ -2,6 +2,25 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.26.0] - 2026-11-12
+
+### Added
+- Debug log rotation: with `"debug": 1` in config.json the live log now grows to **10 MB** before rotating and keeps **10 backups named `tiltboard.debug.log.0` … `.9`** (`.0` is always the newest rotation, each rollover shifts older ones up and drops whatever falls past the tenth). With `"debug": 0` nothing changes from before — standard mode still rotates at 1 MB with three backups (`tiltboard.log.1-3`) and never touches the debug backups.
+
+### Changed
+- Switching back to `"debug": 0` while an over-1 MB live log is sitting around now saves it **once** as `tiltboard.log.bak` (collision-safe: a pre-existing `.bak` becomes `.bak.1`, then `.bak.2`, …) before starting a fresh empty log — the extended session is kept readable instead of being chopped into 1 MB slices.
+
+### Fixed
+- Rollover backups used to be renamed `tiltboard.log.N` (the standard-mode scheme); they are now consistently named `tiltboard.debug.log.N`. A missing `tiltboard.log` on a fresh install no longer skips file-handler creation in either mode, and the startup crash (`NameError: name 'log' is not defined`) from logging before the logger existed has been removed.
+
+## [1.25.0] - 2026-11-12
+
+### Changed
+- After a successful post (plain text or file attachment) and after deleting a tilt, the page now navigates to `/` (page 1) instead of reloading in place (`location.reload()`). Previously a stale `?page=N` left in the address bar was re-fetched by that reload — so posting from an old tab always "jumped" back to that same old page. Since new tilts are always placed on top, landing on page 1 also guarantees your own post is visible right away. The settings-box save still reloads in place, and typing a `?page=N` URL directly keeps working as before.
+
+### Fixed
+- Deleting or posting while the address bar held an old `/?page=2` (or any other page) no longer "jumps" back to that stale page — every action now shows the fresh board starting at page 1. Related: the earlier `SyntaxWarning` for the invalid escape sequence in the `format_text()` docstring (`app.py`) was removed as well, so Python starts up without warnings.
+
 ## [1.24.4] - 2026-11-12
 
 ### Changed

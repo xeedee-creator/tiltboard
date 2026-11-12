@@ -45,10 +45,54 @@ if not os.path.isdir(STYLES_DIR):
         STYLES_DIR = os.path.join(_bundled, "styles")
 
 
+class _DebugRotatingHandler(RotatingFileHandler):
+    """Rotation with custom backup names (v1.26.0): the live file stays tiltboard.log,
+    but its rotations are named <stem>.debug.log.N - .0 is the newest rotation and each
+    rollover shifts older backups up, dropping whatever falls past max_debug_backups.
+    Standard mode never writes these names (and never deletes existing ones)."""
+
+    def __init__(self, filename: str, max_bytes: int,
+                 max_debug_backups: int = 10, encoding: str | None = "utf-8") -> None:
+        super().__init__(filename, mode="a", maxBytes=max_bytes,
+                         backupCount=max_debug_backups, encoding=encoding)
+        self._debug_stem, _ext = os.path.splitext(filename)   # .../tiltboard.log
+
+    def doRollover(self) -> None:
+        stem = self._debug_stem
+        last = self.backupCount - 1
+        oldest = f"{stem}.debug.log.{last}"
+        if os.path.exists(oldest):                       # make room: drop the oldest copy
+            try:
+                os.remove(oldest)
+            except OSError:
+                pass
+        for i in range(last - 1, -1, -1):
+            src = f"{stem}.debug.log.{i}"
+            if os.path.exists(src):                      # shift .N -> .N+1, newest becomes .0
+                try:
+                    os.rename(src, f"{stem}.debug.log.{i + 1}")
+                except OSError:
+                    break
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+        os.rename(self.baseFilename, f"{stem}.debug.log.0")  # current log becomes the newest backup
+        try:
+            if not self.delay:
+                self.stream = self._open()
+        except OSError:
+            pass
+
+
 def _init_logging() -> logging.Logger:
-    """Persistent app log: tiltboard.log next to the app (1 MB x 3 rotations) plus
-    stdout so terminal/nohup captures keep working. Routine traffic stays quiet;
-    errors and notable events are always recorded."""
+    """Persistent app log: tiltboard.log next to the app plus stdout so terminal/nohup
+    captures keep working. Routine traffic stays quiet; errors and notable events are
+    always recorded. Rotation depends on "debug" from config.json (v1.26.0):
+      0 - standard mode, rotates at 1 MB with backups .1-.3
+      1 - DEBUG level, rotates at 10 MB and keeps 10 backups named tiltboard.debug.log.0-.9 (.0 = newest)
+    Switching back to 0 never deletes those debug backups; if the live log is already
+    above 1 MB it is saved as tiltboard.log.bak once and a fresh empty log starts.
+    A missing log file on first startup works in both modes."""
     debug = False  # v1.24.0: "debug": 1 in config.json switches the log to DEBUG level
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:   # CONFIG_PATH is defined above, before this runs
@@ -60,13 +104,37 @@ def _init_logging() -> logging.Logger:
     logger = logging.getLogger("tiltboard")
     logger.setLevel(logging.DEBUG if debug else logging.INFO)
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")
-    try:
-        file_handler = RotatingFileHandler(LOG_PATH, maxBytes=1_048_576,
-                                           backupCount=3, encoding="utf-8")
-        file_handler.setFormatter(fmt)
-        logger.addHandler(file_handler)
-    except OSError:  # a non-writable log must never kill the board
-        pass
+    MB = 1_048_576
+    if debug:  # v1.26.0: bigger log and more history while extended logging is on
+        try:
+            file_handler = _DebugRotatingHandler(LOG_PATH, max_bytes=10 * MB,
+                                                 max_debug_backups=10)
+            file_handler.setFormatter(fmt)
+            logger.addHandler(file_handler)
+        except OSError:  # a non-writable log must never kill the board
+            pass
+    else:
+        try:
+            if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > MB:
+                # v1.26.0: leaving debug mode with an oversized log - save it as .bak once
+                # (the exists() guard keeps a fresh install without any log from hitting the OSError path)
+                bak_path = LOG_PATH + ".bak"
+                i, keep = 1, False
+                while not keep:
+                    try:
+                        os.rename(LOG_PATH, bak_path)
+                        keep = True
+                    except FileExistsError:      # a .bak from an earlier switch already exists
+                        bak_path = f"{LOG_PATH}.bak.{i}"
+                        i += 1
+                logger.info("log over %d MB after debug mode - moved to %s, starting fresh",
+                         MB, os.path.basename(bak_path))
+            file_handler = RotatingFileHandler(LOG_PATH, maxBytes=MB, backupCount=3,
+                                               encoding="utf-8")
+            file_handler.setFormatter(fmt)
+            logger.addHandler(file_handler)
+        except OSError:  # a non-writable log must never kill the board
+            pass
     stream = logging.StreamHandler(sys.stdout)
     stream.setFormatter(fmt)
     logger.addHandler(stream)
@@ -74,7 +142,7 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "1.24.4"  # v1.24.4: emoji picker pair-swap - 👏↔💝 and ➤︎(U+27A4 FE0E)↔🛑 exchanged positions
+VERSION = "1.26.0"  # v1.26.0: "debug": 1 log rotates at 10 MB into tiltboard.debug.log.0-.9; switching off saves an oversized live log once as .bak
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
 NUM_COLORS = 10  # each stylesheet defines its own palette for data-c="0..9"
@@ -771,7 +839,9 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
       // this early return bypassed it, so a cookie name never reached chat.txt for plain-text posts again.
       // Same rule as lineFor(0); called directly here because lineFor() is TDZ-unreachable from inside its own callback scope.
       fd.set("message", name === DEFAULT_NAME ? text : name + ": " + text);
-      fetch("/post", { method: "POST", body: fd }).then((r) => location.reload()).catch(fail);
+      // v1.25.0: go to page 1 after posting - the new tilt is always on top, and reloading
+      // a stale URL (e.g. /?page=2 left over from earlier browsing) would hide it.
+      fetch("/post", { method: "POST", body: fd }).then((r) => location.href = "/").catch(fail);
       return;
     }
     // v1.18.0 pre-flight: one oversized drop/paste aborts the whole batch BEFORE anything is posted -
@@ -840,7 +910,8 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
     };
     const runBatch = (i) => {
       postIdx = i + 1;                        // v1.18.0: the overlay counter knows which file of the batch is uploading
-      if (i >= files.length) { location.reload(); return; }
+      // v1.25.0: same as the plain-text post - land on page 1, never re-fetch a stale ?page=N
+      if (i >= files.length) { location.href = "/"; return; }
       sendFile(i, files[i].file, files[i].source, lineFor(i))
         .then(() => runBatch(i + 1))          // v1.18.0: each extra file is its own tilt - posted one after another
         .catch((err) => fail(err && err.message, i));
@@ -1261,7 +1332,9 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ text: post.text, attach: post.attach }) })
       .then((r) => r.json().catch(() => ({})))
-      .then((res) => { if (res && res.ok) location.reload(); else alert("Delete failed: " + ((res && res.error) || "unknown error")); })
+      // v1.25.0: after a successful delete, show the fresh board on page 1 -
+      // reloading in place could re-fetch a stale ?page=N from the address bar.
+      .then((res) => { if (res && res.ok) location.href = "/"; else alert("Delete failed: " + ((res && res.error) || "unknown error")); })
       .catch(() => alert("Delete failed - could not reach the server."));
   });
 
@@ -1841,7 +1914,7 @@ def format_text(raw: str) -> str:
       ~~text~~   strikethrough span - escapes work inside it (per word) and stacked
                  prefixes before it wrap the whole content; an unmatched ~~ keeps both tildes as-is
       \\bword    bold the next non-space token (\\u/\\i likewise)
-      stacked    prefixes apply together in written order - \b\itext becomes <b><i>text</i></b>
+      stacked    prefixes apply together in written order - \\b\\itext becomes <b><i>text</i></b>
                  with closing tags unwound in reverse; duplicate letters are ignored. An escape
                  run without a word after it stays literal, unless a ~~span~~ follows (v1.5.8/v1.19.1).
       A formatted token ends where any recognized escape starts or at the first tilde,

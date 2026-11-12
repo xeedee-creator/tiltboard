@@ -13,6 +13,7 @@ chat.txt
 
 # Logs and local test leftovers (dev server, probes, one-off scripts)
 *.log
+/tiltboard.log.bak*
 dev.out
 dev.err
 posts.json
