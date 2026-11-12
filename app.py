@@ -20,11 +20,16 @@ import random
 import re
 import socket
 import sys
+import hashlib
+import threading  # v2.0.0: shared lock for every chat.txt write + the sync worker thread
 import email.policy
 from email.parser import BytesParser  # cgi module is gone on Python >= 3.13
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from urllib.parse import parse_qs, quote, unquote, urlparse
+import time  # v2.0.0: sync worker pacing and retry backoff
+import urllib.request
+import queue  # v2.0.0: local commit actions awaiting forwarding to the passive board
 
 # Frozen (PyInstaller/Nuitka .exe): __file__ points into a temp unpack dir,
 # so anchor on the executable itself; plain `python app.py` keeps old behavior.
@@ -149,7 +154,8 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "1.27.0"  # v1.27.0: who's-on-the-board logging (client address + cookies) and favicon.ico / .exe icon
+VERSION = "2.0.0"  # v2.0.0: server-to-server repository sync - per-line IDs, /sync/state handshake,
+# remote-wins mirroring of chat.txt and data files with Range-resuming downloads
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
 NUM_COLORS = 10  # each stylesheet defines its own palette for data-c="0..9"
@@ -157,7 +163,7 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
 
 
 def load_config() -> dict:
-    """Read host/port/data_folder/rows/columns/style/slow_upload from config.json with fallbacks.
+    """Read host/port/data_folder/rows/columns/style/slow_upload + sync keys (v2.0.0) from config.json.
 
     data_folder: empty/missing -> <app>/data; relative values resolve against
     the app folder; absolute paths (incl. UNC \\server\\share) pass through.
@@ -208,8 +214,23 @@ def load_config() -> dict:
     if low not in (0, 1):                          # anything else is invalid -> normal mode, loudly so
         log.warning("invalid 'slow_upload' in config.json; using 0")
         low = 0
+    def sync_url(key: str) -> str:                 # v2.0.0: optional repo-sync peer - "" keeps single-server mode
+        value = str(raw.get(key, "") or "").strip()
+        if not value:
+            return ""
+        if not re.match(r"^https?://", value):     # a URL without scheme would hang the worker silently
+            log.warning("invalid '%s' in config.json (needs http:// or https://); sync off for that slot",
+                        key)
+            return ""
+        return value.rstrip("/")
+
+    server_1, server_2 = sync_url("server_1_sync"), sync_url("server_2_sync")  # v2: peer mirrored; slot 2 reserved
+    token = str(raw.get("sync_token", "") or "").strip()
+    if token and not re.search(r"[!-~]{16,}", token):   # a weak token fails closed - flag it at boot once
+        log.warning("short/weak 'sync_token' in config.json - use a long random string on both servers")
     return {"host": host, "port": port, "data_folder": data_folder,
-            "rows": rows, "columns": columns, "style": style, "slow_upload": low}
+            "rows": rows, "columns": columns, "style": style, "slow_upload": low,
+            "server_1_sync": server_1, "server_2_sync": server_2, "sync_token": token}
 
 
 def _bundled_config() -> str | None:
@@ -269,6 +290,21 @@ HOST, PORT, DATA_FOLDER, ROWS, COLUMNS, SLOW_UPLOAD = (CONFIG["host"], CONFIG["p
                                             CONFIG["columns"], CONFIG["slow_upload"])
 PAGE_SIZE = ROWS * COLUMNS  # default page size; visitors may override via cookie
 
+# v2.0.0: every chat.txt read-modify-write (post/delete/rate) and the sync
+# worker take this one lock, so two threads can never interleave a rewrite.
+_chat_lock = threading.Lock()
+SYNC_REMOTE = CONFIG["server_1_sync"]   # "" -> pure single-server mode, zero overhead
+SYNC_TOKEN = CONFIG["sync_token"]       # both servers must hold the same string
+# v2.0.0: every local chat.txt commit (post/rate/delete) wakes the sync worker via
+# _sync_dirty() so a change is mirrored within one tick instead of waiting out ~3 s.
+_sync_wake = threading.Event()
+_pending_actions = queue.Queue()  # (action, payload) tuples the worker forwards before each poll
+
+
+def _sync_dirty() -> None:  # callable from any request thread; no-op without server_1_sync
+    if SYNC_REMOTE:
+        _sync_wake.set()
+
 try:  # a configured folder that cannot be created should be loud, not hidden
     os.makedirs(DATA_FOLDER, exist_ok=True)
 except OSError as e:
@@ -316,8 +352,33 @@ ATTACH_RE = re.compile(r"\s+(file://\S+)$")
 RATING_RE = re.compile(r"::(\d+):(\d+):(\d+):(\d+)$")
 
 
+# v2.0.0 sync: every chat.txt line carries one stable identity at the very end -
+# "<8 hex of sha256(display text)>_<monotonic seq>" as a single whitespace-separated
+# token after any rating tail and attachment token. The ID never changes once assigned
+# (ratings keep it), so remote diffs can match lines by identity instead of position.
+# Pre-sync history is backfilled with IDs on the first sync-enabled start.
+LINE_ID_RE = re.compile(r" [0-9a-f]{8}_[1-9][0-9]*$")
+_id_seq = 0  # caller must hold _chat_lock (persist_text / backfill both do)
+
+def _strip_line_id(line: str) -> tuple[str, int]:
+    """v2.0.0 sync: (line without ID token, seq-or-0). Call before ATTACH_RE/RATING_RE."""
+    m = LINE_ID_RE.search(line.rstrip("\n"))
+    if not m:
+        return line.rstrip("\n"), 0
+    base = line[:m.start()]
+    return (base or "").rstrip(), int(m.group(0)[1:].rsplit("_", 1)[1])
+
+def _new_line_id(display_text: str) -> str:
+    """v2.0.0 sync: fresh ID token for display text without rating tail; caller holds _chat_lock."""
+    global _id_seq
+    digest = hashlib.sha256(display_text.encode("utf-8")).hexdigest()[:8]
+    return f"{digest}_{_id_seq + 1}"
+
 def split_line(line: str) -> tuple[str, str | None]:
     """Split a chat.txt line into (display text, attachment path or None)."""
+    m = LINE_ID_RE.search(line.rstrip("\n"))  # v2.0.0: strip the stable ID before ATTACH_RE
+    if m:
+        line = line[:m.start()]
     m = ATTACH_RE.search(line)
     if not m:
         return line.rstrip("\n"), None
@@ -384,9 +445,65 @@ def persist_text(text: str, stored_name: str | None = None) -> None:
         local = os.path.normpath(os.path.join(DATA_FOLDER, stored_name)) \
             .replace("\\", "/")  # E:\data\x.jpg -> E:/data/x.jpg ; UNC keeps //server
         text += f" file://{local.replace(' ', '%20')}"
-    with open(CHAT_PATH, "a", encoding="utf-8") as f:
-        f.write(text + "\n")
+    with _chat_lock:  # v2.0.0: appends share one lock with delete/rate rewrites
+        text += " " + _new_line_id(text)  # v2.0.0: new posts carry their stable ID at write time
+        with open(CHAT_PATH, "a", encoding="utf-8") as f:
+            f.write(text + "\n")
 
+
+def backfill_line_ids() -> None:
+    """v2.0.0 sync: one-time stable-ID assignment for pre-sync chat.txt history.
+
+    Idempotent - when every line already ends with an ID this is a no-op. Runs only
+    in main() when server_1_sync is configured; new posts get their IDs at write time
+    instead (persist_text).
+    """
+    global _id_seq
+    if not SYNC_REMOTE:
+        return  # pure single-server mode: zero overhead, no ID bookkeeping needed
+    with _chat_lock:
+        try:
+            lines = open(CHAT_PATH, encoding="utf-8").read().splitlines()
+        except OSError:
+            return  # unreadable file - the next successful run will retry
+        need, max_seq = False, 0
+        for ln in lines:
+            if not ln.strip():
+                continue
+            _, seq = _strip_line_id(ln)
+            max_seq = max(max_seq, seq)
+            if seq == 0:  # no ID yet - this is the pre-sync history
+                need = True
+        if not need:
+            return  # every line already carries an identity - nothing to do
+        new_lines, n, changed = [], max_seq, 0
+        for ln in lines:
+            if not ln.strip():
+                new_lines.append(ln)
+                continue
+            base, seq = _strip_line_id(ln)
+            if seq > 0:
+                new_lines.append(ln)  # keep byte-for-byte, ID already assigned
+                continue
+            am = ATTACH_RE.search(base.rstrip("\n"))      # rating tail may sit between text and attach
+            base2 = (base[:am.start()] if am else base).rstrip("\n")
+            rm = RATING_RE.search(base2)
+            if rm:
+                base2 = base2[:rm.start()].rstrip()
+            n += 1
+            new_lines.append(f"{ln} {hashlib.sha256(base2.encode('utf-8')).hexdigest()[:8]}_{n}")
+            changed += 1
+        tmp = CHAT_PATH + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                for ln in new_lines:
+                    if ln.strip():
+                        f.write(ln + "\n")
+            os.replace(tmp, CHAT_PATH)
+            _id_seq = n
+        except OSError as e:
+            log.warning("ID backfill failed: %s - will retry on next start", e)
+    log.info("backfilled stable line IDs for %d pre-sync lines (max seq now %d)", changed, n)
 
 def add_post(text: str, stored_name: str | None = None) -> None:
     persist_text(text, stored_name)
@@ -2034,6 +2151,27 @@ class Handler(BaseHTTPRequestHandler):
         if body:
             self.wfile.write(body)
 
+    def _send_stream(self, status: int, fileobj, length: int, headers=None) -> None:
+        """v2.0.0 sync: stream an open binary handle without buffering it in RAM - /files/
+        uses this for full downloads and 206 partials so a multi-GB attachment is never
+        materialized as one bytes object (a plain _send would read the whole file first)."""
+        self.send_response(status)
+        self.send_header("Content-Length", str(length))
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+        sent = 0
+        try:
+            while sent < length:  # bounded writes - the loop exits on short read / EOF too
+                chunk = fileobj.read(min(STREAM_BUF, length - sent))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                sent += len(chunk)
+        except (ConnectionResetError, BrokenPipeError):  # client aborted mid-stream (tab closed,
+            log.info("client %s dropped stream at byte %d/%d - ignored",
+                     self.client_address[0], sent, length)  # refresh during download); not a fault
+
     def _css_for(self, name_param: str | None) -> tuple[bytes, bool]:  # (css_bytes, ok)
         """Resolve a /style.css request: an explicit ?name= overrides the config
         default. Unknown names fall back to the configured theme."""
@@ -2045,6 +2183,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        # v2.0.0 sync handshake - the single endpoint a peer server calls for a full diff.
+        if path == "/sync/state":
+            self._handle_sync_state()
+            return
         if path in ("/", "/index.html"):
             # v1.27.0: who's here - client address plus whatever this browser has stored
             host, port_no = self.client_address[0], self.client_address[1]
@@ -2134,11 +2276,33 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, b"Not found")
                 return
             ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            size = os.path.getsize(real)
+            # v2.0.0: a Range request means the caller already holds the first N bytes and wants
+            # only the rest - that is the resume primitive the sync worker uses for interrupted
+            # downloads (and it lets any HTTP client resume an attachment after a network loss).
+            start = 0
+            rmatch = re.match(r"bytes=(\d+)-(\d*)$", self.headers.get("Range", "") or "")
+            if rmatch and rmatch.group(1).isdigit():
+                start = max(int(rmatch.group(1)), 0)
+                end_inclusive = int(rmatch.group(2)) if rmatch.group(2) else size - 1
+                end_inclusive = min(end_inclusive, size - 1)
+            else:
+                end_inclusive = size
+            ranged = bool(rmatch)
+            remaining = (end_inclusive - start + 1) if ranged else size  # bytes this request wants
             with open(real, "rb") as f:
-                body = f.read()
-            quoted = name.replace("\\", "\\\\").replace('"', '\\"')  # non-ASCII names survive too
-            self._send(200, body, {"Content-Type": ctype,
-                                   "Content-Disposition": f'attachment; filename="{quoted}"'})
+                if ranged and start > 0:  # skip the bytes we already have on the other side
+                    f.seek(start)
+                quoted = name.replace("\\", "\\\\").replace('"', '\\"')  # non-ASCII names survive too
+                if ranged:  # 206 partial content - the peer appends to its .part and resumes from start
+                    self._send_stream(206, f, remaining, {"Content-Type": ctype,
+                                                          "Content-Disposition": f'attachment; filename="{quoted}"',
+                                                          "Content-Range": f"bytes {start}-{end_inclusive}/{size}",
+                                                          "Accept-Ranges": "bytes"})
+                else:  # full file - streamed too, never buffered whole in RAM
+                    self._send_stream(200, f, remaining, {"Content-Type": ctype,
+                                                           "Content-Disposition": f'attachment; filename="{quoted}"',
+                                                           "Accept-Ranges": "bytes"})
         else:
             self._send(404, b"Not found")
 
@@ -2179,6 +2343,8 @@ class Handler(BaseHTTPRequestHandler):
             stored_name = os.path.basename(real) if real and os.path.isfile(real) else None  # unknown/aborted name -> plain text post, no broken link
             if message or stored_name:
                 add_post(message, stored_name)
+                _sync_dirty()  # v2.0.0: wake the worker - this commit must reach the passive board
+                _pending_actions.put(("post", {"text": message, "attach": stored_name}))
             # The chunked client parses this reply as JSON. A 302 would make fetch() follow
             # it to the HTML board page and crash r.json() - so answer with plain JSON here.
             self._send(200, json.dumps({"ok": True}).encode(), {"Content-Type": "application/json"})
@@ -2188,7 +2354,51 @@ class Handler(BaseHTTPRequestHandler):
             stored_name = None
         if message or stored_name:
             add_post(message, stored_name)
+            _sync_dirty()  # v2.0.0: wake the worker - this commit must reach the passive board
+            _pending_actions.put(("post", {"text": message, "attach": stored_name}))
         self._send(302, headers={"Location": "/"})
+
+    # --- v2.0.0 sync handshake -------------------------------------------------
+
+    def _handle_sync_state(self):
+        """GET /sync/state - full diff material for the active peer: every chat line keyed by its
+        stable ID plus every stored file with its size.
+
+        Serving this route means WE are the passive side, so make sure our own lines carry IDs
+        first (one-time backfill) - the peer's remote-wins diff needs a stable identity per line.
+        The token gate is opt-in: an empty sync_token on this board leaves the endpoint open,
+        which also keeps pure single-server installs with no peer at zero overhead. Partial or
+        in-progress downloads (.part plus its .off bookkeeping) are not real attachments yet, so
+        they stay out of the map.
+        """
+        if SYNC_TOKEN:
+            provided = self.headers.get("X-Tiltboard-Sync", "")
+            if provided != SYNC_TOKEN:  # wrong or missing token -> JSON error per the app convention
+                self._send(401, json.dumps({"ok": False, "error": "sync token mismatch"}).encode(),
+                           {"Content-Type": "application/json", "Cache-Control": "no-store"})
+                return
+        backfill_line_ids()  # idempotent: no-op when every line already carries its ID
+        lines = {}
+        with _chat_lock:
+            try:
+                with open(CHAT_PATH, encoding="utf-8") as f:
+                    raw_lines = [ln.rstrip("\n") for ln in f]
+            except OSError:
+                raw_lines = []
+        for ln in raw_lines:  # skip blanks and the one-time backfill marker if present
+            m = LINE_ID_RE.search(ln)
+            if m:
+                lines[m.group(0)] = ln
+        files = {}
+        try:
+            for entry in os.scandir(DATA_FOLDER):
+                if not entry.is_file() or entry.name.startswith("."):
+                    continue  # staging names are dot-prefixed: .part bodies and .off offsets
+                files[entry.name] = entry.stat().st_size
+        except OSError:
+            pass
+        self._send(200, json.dumps({"lines": lines, "files": files}).encode("utf-8"),
+                   {"Content-Type": "application/json", "Cache-Control": "no-store"})
 
     # --- v1.16.0: chunked upload of big attachments ---------------------------
     # Files above CHUNK_UPLOAD_LIMIT arrive in ~8 MB pieces (file.slice on the client), so
@@ -2283,24 +2493,25 @@ class Handler(BaseHTTPRequestHandler):
         log.debug("action=delete text=%r attach=%s", text[:80], attach_name)  # v1.24.0: extended logging
         removed_file = False
         try:
-            with open(CHAT_PATH, encoding="utf-8") as f:
-                lines = [ln.rstrip("\n") for ln in f]
-            _text, path = split_line(lines[idx - 1])
-            if path and attach_name and os.path.basename(path) == attach_name:
-                real, root = os.path.realpath(path), os.path.realpath(DATA_FOLDER)
-                inside = True
-                try:
-                    inside = os.path.commonpath([real, root]) == root
-                except ValueError:  # cross-drive / UNC-vs-local mismatch -> outside
-                    inside = False
-                if inside and os.path.isfile(real):
-                    os.remove(real)  # physically delete the source file/picture
-                    removed_file = True
-            del lines[idx - 1]
-            with open(CHAT_PATH, "w", encoding="utf-8") as f:
-                for ln in lines:  # every other line is preserved byte-for-byte
-                    if ln.strip():
-                        f.write(ln + "\n")
+            with _chat_lock:  # v2.0.0: whole read-modify-write of chat.txt atomized
+                with open(CHAT_PATH, encoding="utf-8") as f:
+                    lines = [ln.rstrip("\n") for ln in f]
+                _text, path = split_line(lines[idx - 1])
+                if path and attach_name and os.path.basename(path) == attach_name:
+                    real, root = os.path.realpath(path), os.path.realpath(DATA_FOLDER)
+                    inside = True
+                    try:
+                        inside = os.path.commonpath([real, root]) == root
+                    except ValueError:  # cross-drive / UNC-vs-local mismatch -> outside
+                        inside = False
+                    if inside and os.path.isfile(real):
+                        os.remove(real)  # physically delete the source file/picture
+                        removed_file = True
+                del lines[idx - 1]
+                with open(CHAT_PATH, "w", encoding="utf-8") as f:
+                    for ln in lines:  # every other line is preserved byte-for-byte
+                        if ln.strip():
+                            f.write(ln + "\n")
         except OSError as e:
             self._send(500, json.dumps({"ok": False, "error": str(e)}).encode())
             return
@@ -2315,6 +2526,8 @@ class Handler(BaseHTTPRequestHandler):
         snippet = text.replace("\n", " ")[:60]
         log.info("tilt deleted (chat.txt line %d): %s%s", idx, snippet,
                  f" (source file {attach_name} removed)" if removed_file else "")
+        _sync_dirty()  # v2.0.0: queue the deletion for forwarding to the passive board
+        _pending_actions.put(("delete", {"text": text, "attach": attach_name}))
         self._send(200, json.dumps({"ok": True, "removed_file": removed_file}).encode(),
                    {"Content-Type": "application/json"})
 
@@ -2348,23 +2561,27 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"ok": False, "error": "tilt not found"}).encode())
             return
         try:
-            with open(CHAT_PATH, encoding="utf-8") as f:
-                lines = [ln.rstrip("\n") for ln in f]
-            raw = lines[idx - 1]
-            m = ATTACH_RE.search(raw)          # keep the attachment tail byte-for-byte
-            base = (raw[:m.start()] if m else raw).rstrip()
-            counts = [0, 0, 0, 0]
-            rm = RATING_RE.search(base)
-            if rm:
-                counts = [int(g) for g in rm.groups()]
-                base = base[:rm.start()].rstrip()
-            counts[icon_idx] += 1
-            lines[idx - 1] = (f"{base}::{counts[0]}:{counts[1]}:{counts[2]}:{counts[3]}"
-                              + (raw[m.start():] if m else ""))
-            with open(CHAT_PATH, "w", encoding="utf-8") as f:
-                for ln in lines:  # every other line is preserved byte-for-byte
-                    if ln.strip():
-                        f.write(ln + "\n")
+            with _chat_lock:  # v2.0.0: whole read-modify-write of chat.txt atomized
+                with open(CHAT_PATH, encoding="utf-8") as f:
+                    lines = [ln.rstrip("\n") for ln in f]
+                raw = lines[idx - 1]
+                id_m = LINE_ID_RE.search(raw)   # v2.0.0: the stable ID token rides at the very end
+                line_no_id = (raw[:id_m.start()].rstrip() if id_m else raw)
+                m = ATTACH_RE.search(line_no_id)      # keep the attachment tail byte-for-byte
+                base = (line_no_id[:m.start()] if m else line_no_id).rstrip()
+                counts = [0, 0, 0, 0]
+                rm = RATING_RE.search(base)
+                if rm:
+                    counts = [int(g) for g in rm.groups()]
+                    base = base[:rm.start()].rstrip()
+                counts[icon_idx] += 1
+                lines[idx - 1] = (f"{base}::{counts[0]}:{counts[1]}:{counts[2]}:{counts[3]}"
+                                  + (line_no_id[m.start():] if m else "")
+                                  + ((id_m.group(0) or " ") if id_m else ""))
+                with open(CHAT_PATH, "w", encoding="utf-8") as f:
+                    for ln in lines:  # every other line is preserved byte-for-byte
+                        if ln.strip():
+                            f.write(ln + "\n")
         except OSError as e:
             self._send(500, json.dumps({"ok": False, "error": str(e)}).encode())
             return
@@ -2377,6 +2594,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # memory is only a cache; chat.txt is the source of truth
             pass
         log.info("tilt rated %s (chat.txt line %d): %d:%d:%d:%d", req.get("icon", "?"), idx, *counts)
+        _sync_dirty()  # v2.0.0: queue the rating for forwarding to the passive board
+        _pending_actions.put(("rate", {"icon": req.get("icon"), "text": text, "attach": attach_name}))
         self._send(200, json.dumps({"ok": True, "rating": counts}).encode(),
                    {"Content-Type": "application/json"})
 
@@ -2442,8 +2661,321 @@ def local_lan_ip():
         s.close()
 
 
+# ---------------------------------------------------------------------------
+# v2.0.0 sync worker
+# ---------------------------------------------------------------------------
+# Active side only (server_1_sync set). Every tick the worker first forwards any
+# locally committed actions to the passive board, then pulls the peer's full state
+# and reconciles chat.txt line-by-line (remote-wins on same-ID conflicts), then
+# downloads missing data files with Range-resume. On any transport error it backs
+# off ~30 s and keeps ticking - the thread never dies from a single failed tick.
+_SYNC_TICK = 2.0          # steady-state poll interval in seconds
+_SYNC_BACKOFF = 30.0      # cooldown after a failed forward or pull before retrying
+_FETCH_WORKERS = 3        # concurrent file downloads during large initial syncs
+_FORWARD_FAIL_DROP = 5    # drop an action with a log entry after this many retries
+
+
+def _sync_headers() -> dict:
+    headers = {"User-Agent": "TiltboardSync/" + VERSION}
+    if SYNC_TOKEN:
+        headers["X-Tiltboard-Sync"] = SYNC_TOKEN
+    return headers
+
+
+def _sync_push_file(stored_name: str) -> None:
+    """Push a local attachment to the passive board via its chunked upload flow.
+    No-op when the file already exists there (size matches)."""
+    src = os.path.join(DATA_FOLDER, stored_name)
+    if not os.path.isfile(src):
+        log.warning("sync forward: local attach missing from data folder: %s", stored_name)
+        return stored_name
+    size = os.path.getsize(src)
+    try:
+        req = urllib.request.Request(SYNC_REMOTE + "/files/" + urllib.parse.quote(stored_name),
+                                     headers=_sync_headers())
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if int(resp.headers.get("Content-Length") or 0) == size:
+                return stored_name  # already there - nothing to do
+    except Exception:
+        pass  # 404 (or unreachable) means we must upload it
+    init_data = json.dumps({"name": stored_name}).encode()
+    req = urllib.request.Request(SYNC_REMOTE + "/upload/init",
+                                 headers={**_sync_headers(), "Content-Type": "application/json"},
+                                 data=init_data)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        init_resp = json.loads(resp.read().decode())
+    stored_name = init_resp.get("stored") or stored_name
+    if not os.path.join(DATA_FOLDER, stored_name).startswith(DATA_FOLDER):
+        raise RuntimeError(f"sync forward: unsafe stored name from remote {stored_name!r}")
+    chunk = 8 * 1024 * 1024
+    off = 0
+    with open(src, "rb") as fh:
+        while True:
+            part = fh.read(chunk)
+            if not part:
+                break
+            req = urllib.request.Request(SYNC_REMOTE + "/upload/chunk",
+                                         data=part,
+                                         headers={**_sync_headers(),
+                                                   "X-Stored-Name": stored_name,
+                                                   "X-Chunk-Offset": str(off),
+                                                   "Content-Type": "application/octet-stream"})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                resp.read()
+            off += len(part)
+    log.info("sync forward: uploaded %s (%d bytes) to passive board", stored_name, size)
+
+
+def _sync_forward(action: str, payload: dict) -> None:
+    """POST one local commit action to the passive board with its client JSON keys."""
+    if action == "post":
+        body = {"message": payload["text"]}
+        attach = payload.get("attach")
+        if attach:
+            attached = _sync_push_file(attach)
+            body["attach_stored"] = attached or payload.get("attach")
+    elif action == "delete":
+        body = {"text": payload["text"], "attach": payload.get("attach")}
+    else:  # rate
+        body = {"icon": payload.get("icon"), "text": payload["text"],
+                "attach": payload.get("attach")}
+    path = "/" + action
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(SYNC_REMOTE + path, data=data,
+                                 headers={**_sync_headers(),
+                                          "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        resp.read()
+
+
+def _sync_forward_queue() -> None:
+    """Drain pending local actions; keep failing ones queued for the next tick."""
+    if not SYNC_REMOTE or _pending_actions.empty():
+        return
+    retry: list[tuple[str, dict]] = []
+    fails: dict[int, int] = {}
+    while True:
+        try:
+            action, payload = _pending_actions.get_nowait()
+        except queue.Empty:
+            break
+        try:
+            _sync_forward(action, payload)
+            log.info("sync forward ok: %s", action)
+        except Exception as e:
+            idx = id(payload)
+            fails[idx] = fails.get(idx, 0) + 1
+            if fails[idx] >= _FORWARD_FAIL_DROP:
+                log.error("sync forward dropped after %d tries: %s (%s)",
+                          fails[idx], action, e)
+            else:
+                retry.append((action, payload))
+    for item in retry:
+        _pending_actions.put(item)
+
+
+def _sync_pull_state() -> dict | None:
+    try:
+        req = urllib.request.Request(SYNC_REMOTE + "/sync/state",
+                                     headers=_sync_headers())
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        log.debug("sync pull failed: %s", e)
+        return None
+
+
+def _sync_apply_lines(state: dict) -> bool:
+    """Reconcile chat.txt against the remote lines map under _chat_lock.
+    Returns False when the peer's backfill has not run yet (empty lines)."""
+    raw_remote = state.get("lines") or {}
+    if not raw_remote:
+        return False
+    # keys arrive with LINE_ID_RE's leading space; drop it so every lookup below is space-free
+    remote = {k[1:] if k.startswith(" ") else k: v for k, v in raw_remote.items()}
+    with open(CHAT_PATH, "r", encoding="utf-8", errors="replace") as fh:
+        local_lines = [ln.rstrip("\n") for ln in fh if ln.strip()]
+    local_ids: set[str] = set()
+    keep: list[str] = []
+    conflict_lids: set[str] = set()  # same ID on both sides, different text -> remote wins
+    for ln in local_lines:
+        stripped, _seq = _strip_line_id(ln)
+        m = LINE_ID_RE.search(stripped) or LINE_ID_RE.search(ln)
+        lid = m.group(0)[1:] if m else None
+        if lid and lid in local_ids:  # defensive - IDs are unique by construction
+            keep.append(ln)
+            continue
+        local_ids.add(lid or ln)
+        rtext = remote.get(lid) if lid else None
+        if lid is None or rtext is None:
+            keep.append(ln)  # ID-less line, or a local-only line - no counterpart on the peer
+            continue
+        if rtext == stripped:
+            keep.append(ln)  # identical content on both sides - nothing to do
+            continue
+        conflict_lids.add(lid)  # dropped from keep; the remote copy is appended below
+    # NOTE: keys of the lines map are IDs; values are full line text with ID already at end.
+    # Remote-only IDs are appended as-is; conflict IDs replace their local copy at the tail.
+    # local_ids holds every local ID (kept or conflicting); a remote ID in neither set
+    # must be a new remote-only line and gets appended as-is.
+    to_append: list[str] = []
+    for rid, rtext in remote.items():
+        if rid == "::":
+            continue
+        stripped_r, _seq = _strip_line_id(rtext.rstrip("\n"))
+        m = LINE_ID_RE.search(stripped_r) or LINE_ID_RE.search(rtext.rstrip("\n"))
+        rlid = m.group(0)[1:] if m else None
+        if rlid is not None:
+            rid_key = rlid
+        else:
+            rid_key = rid  # pre-backfill remote key form - tolerate it, never re-append ours
+        if rid_key in local_ids and rid_key not in conflict_lids:
+            continue  # identical copy kept above, or a pre-backfill key we never re-append
+        to_append.append(rtext.rstrip("\n") + "\n")
+    changed = False
+    if len(keep) != len(local_lines):
+        tmp = CHAT_PATH + ".sync.tmp"
+        with open(tmp, "w", encoding="utf-8", newline="") as fh:
+            for ln in keep:
+                fh.write(ln + "\n")
+        os.replace(tmp, CHAT_PATH)
+        changed = True
+    if to_append:
+        with open(CHAT_PATH, "a", encoding="utf-8", newline="") as fh:
+            fh.writelines(to_append)
+        changed = True
+    if changed:
+        restore_posts()
+    return True
+
+
+def _sync_fetch_file(name: str, size: int) -> None:
+    """Download one data file with dot-prefixed staging and Range resume."""
+    dest = os.path.join(DATA_FOLDER, name)
+    part = os.path.join(DATA_FOLDER, "." + name + ".part")
+    off_path = os.path.join(DATA_FOLDER, "." + name + ".off")
+    have = 0
+    if os.path.isfile(part) and os.path.isfile(off_path):
+        try:
+            with open(off_path, "r", encoding="utf-8") as fh:
+                have = int(fh.read().strip() or 0)
+        except Exception:
+            have = 0
+    url = SYNC_REMOTE + "/files/" + urllib.parse.quote(name)
+    while True:
+        headers = _sync_headers()
+        if have > 0:
+            headers["Range"] = f"bytes={have}-"
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                code = resp.status
+                total = int(resp.headers.get("Content-Length") or 0)
+                mode = "ab" if (code == 206 and have > 0) else "wb"
+                if mode == "wb":
+                    have = 0
+                with open(part, mode, buffering=1024 * 1024) as fh:
+                    while True:
+                        chunk = resp.read(8 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        have += fh.write(chunk)
+        except Exception as e:
+            log.debug("sync fetch %s retry from offset %d: %s", name, have, e)
+            with open(off_path, "w", encoding="utf-8") as fh:
+                fh.write(str(have))
+            time.sleep(_SYNC_BACKOFF)
+            continue
+        if os.path.isfile(part) and os.path.getsize(part) == size:
+            os.replace(part, dest)
+            try:
+                os.remove(off_path)
+            except OSError:
+                pass
+            log.info("sync fetched %s (%d bytes)", name, size)
+            return
+        with open(off_path, "w", encoding="utf-8") as fh:
+            fh.write(str(have))
+        if have >= size:
+            os.replace(part, dest)
+            try:
+                os.remove(off_path)
+            except OSError:
+                pass
+            return
+    
+
+
+def _sync_files(state: dict) -> None:
+    remote = state.get("files") or {}
+    local = set()
+    if os.path.isdir(DATA_FOLDER):
+        for entry in os.scandir(DATA_FOLDER):
+            if not entry.name.startswith(".") and entry.is_file():
+                local.add(entry.name)
+    pending = [(n, s) for n, s in remote.items() if n not in local]
+    lock = threading.Lock()
+    threads: list[threading.Thread] = []
+
+    def _claim():
+        with lock:
+            if not pending:
+                return None
+            return pending.pop(0)
+
+    def _worker() -> None:
+        while True:
+            got = _claim()
+            if got is None:  # queue drained - exit cleanly (no StopIteration gymnastics)
+                return
+            name, size = got
+            try:
+                _sync_fetch_file(name, size)
+            except Exception as e:
+                log.debug("sync fetch %s failed: %s", name, e)
+
+    with lock:
+        count = len(pending)
+        for _ in range(min(_FETCH_WORKERS, count)):
+            t = threading.Thread(target=_worker, daemon=True)
+            threads.append(t)
+            t.start()
+    if count:
+        log.info("sync fetch pool started: %d file(s), worker cap %d", count, min(_FETCH_WORKERS, count))
+    for t in threads:  # join every worker; each keeps claiming until the queue is dry
+        t.join()
+
+
+def _sync_worker() -> None:
+    log.info("sync worker started: mirroring %s", SYNC_REMOTE)
+    first_tick = True
+    while True:
+        try:
+            _sync_wake.wait(timeout=_SYNC_TICK)
+            _sync_wake.clear()
+            _sync_forward_queue()
+            state = _sync_pull_state()
+            if not isinstance(state, dict):
+                continue  # next tick after a quiet backoff-free gap
+            ok = _sync_apply_lines(state) 
+            if not ok and first_tick:
+                log.info("sync: passive board still backfilling line IDs - skipping line diff this tick")
+            elif not ok:
+                pass  # passive side genuinely empty; local file stays untouched
+            else:
+                _sync_files(state)
+        except Exception as e:
+            log.warning("sync worker tick error (retrying in %ds): %s", int(_SYNC_BACKOFF), e)
+            time.sleep(_SYNC_BACKOFF)
+        finally:
+            first_tick = False
+
+
 def main():
+    backfill_line_ids()  # v2.0.0 sync: one-time stable-ID assignment (no-op without server_1_sync)
     restore_posts()
+    if SYNC_REMOTE:  # v2.0.0 active side - start the sync daemon before serving
+        threading.Thread(target=_sync_worker, name="tiltboard-sync", daemon=True).start()
     try:
         server = ThreadingHTTPServer((HOST, PORT), Handler)
     except OSError as e:  # port already in use etc. - record it instead of dying silently

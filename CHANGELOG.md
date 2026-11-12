@@ -2,6 +2,19 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-11-12
+
+### Added
+- **Server-to-server sync** — one board can now mirror another Tiltboard, strictly one way: set `server_1_sync` (e.g. `http://10.1.1.2:8000`) only on the **active** side and an identical `sync_token` on both machines; a passive board is just a plain board without any sync keys (`server_2_sync` stays parsed but unused this release).
+  - A background worker ticks roughly every 2 s (woken immediately by local events) and makes one handshake request per tick against the passive side's new token-gated `/sync/state` endpoint — 401 when `sync_token` is set there and does not match, dot-prefixed staging files excluded from its listings.
+  - **Line reconciliation** — every chat.txt line now carries a stable short ID at its very end so both sides can match lines without trusting text equality. First sync-enabled startup stamps existing lines once (idempotent backfill, never re-stamped; plain boards never see IDs). New remote lines are appended locally verbatim under the chat lock, missing local ones removed. A **conflict** — same ID holding different text — resolves to **remote-wins**: the local copy is dropped and the passive version takes its place at the tail of chat.txt (no merging).
+  - **File reconciliation** — files that exist on the passive side but not locally are fetched into the data folder, up to 3 in parallel, reusing the `slow_upload` staging skeleton inverted: dot-prefixed `.part` file plus offset note next to it, Range/206 resume, atomic rename only when every byte matches the remote size, ~30 s retry backoff while unreachable (daemon thread dies cleanly on shutdown; log-only progress). A locally hand-deleted data file whose chat.txt line still exists is simply fetched back — self-healing.
+  - **Action forwarding** — local posts, deletes and ratings are replayed onto the passive board as plain HTTP POSTs carrying the `X-Tiltboard-Sync` token header; failures stay queued and retry at growing intervals (~30 s cap) until confirmed or dropped with an error log. Without sync keys nothing runs: no worker, no polling, no overhead.
+  - **Topology** — one-way active→passive by design; pointing both boards' `server_1_sync` at each other would create two active mirrors fighting over ownership and is documented in the README as the anti-pattern to avoid. Tiltboard has no login anywhere, so the token protects the handshake only — keep passive sides reachable from trusted networks alone.
+
+### Notes
+- Single-board installs are untouched: with no `server_1_sync`, none of the sync machinery starts and chat.txt lines stay exactly as before (no ID tail).
+
 ## [1.27.0] - 2026-11-12
 
 ### Added

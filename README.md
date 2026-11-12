@@ -72,6 +72,30 @@ The magnifier icon (left of the settings gear) toggles a search bar that live-fi
 
 Tokens separated by spaces are AND-ed, e.g. `u:john f:report.pdf` finds John's posts with a report.pdf attachment.
 
+## Sync (server to server)
+
+Tiltboard can mirror another Tiltboard so two locations always hold the same board - one machine runs as the **active** side and keeps the other in step, without any database or external sync tool. Both boards keep their plain `chat.txt` + data folder; nothing about a single-board setup changes unless you opt in.
+
+| Key             | Meaning                                                                                                            | Fallback when missing |
+| --------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------- |
+| `server_1_sync` | the passive board to mirror, e.g. `http://10.1.1.2:8000`; set only on the active side                              | sync off              |
+| `sync_token`    | shared secret for the sync handshake; must be **identical on both machines**                                       | no token gate         |
+| `server_2_sync` | reserved slot for a second remote (parsed but not used in this release)                                            | -                     |
+
+One board runs the active side and keeps the other passive: set `server_1_sync` only where the mirror is wanted. A passive board is simply a plain Tiltboard without `server_N_sync` in its config.json - it never polls anything and only accepts sync calls that carry the right token. Configuring both sides to point at each other would create two active mirrors fighting over who owns what, so do not do this.
+
+The active side keeps a background worker ticking roughly every 2 seconds (woken immediately by local events). Each tick it first forwards any still-unconfirmed local actions - posts, deletes and ratings are replayed on the passive board with plain HTTP POSTs carrying the shared token, retried at growing intervals up to ~30 s before they are dropped - then asks the passive side for a single handshake (`/sync/state`) that returns its whole line map and data file list in one request.
+
+From the difference between both sides it reconciles chat.txt and the data folder:
+
+- new remote lines are appended locally, missing ones removed,
+- a **conflict** - the same tilt ID holding different text on both boards - resolves to **remote-wins**: your local copy is dropped and the passive board's version takes its place. No merging is attempted.
+- files that exist on the passive side but not locally are downloaded into the data folder (up to 3 at a time) using the same resumable staging as `slow_upload` - a dot-prefixed `.part` file plus an offset note next to it, an atomic rename once every byte matches the remote size, and ~30 s retries when the network drops. A local file somebody deleted by hand is simply fetched back on the next tick.
+
+Every chat.txt line carries a stable short ID at its very end so both sides can match lines without trusting text equality (plain boards never see it). When sync first switches on, existing lines get IDs once and for all - the backfill is idempotent, nothing is re-stamped. While files are mid-download they stay invisible: dot-prefixed staging names never reach listings or downloads, only a log line tracks their progress.
+
+Security note: Tiltboard has no login by design - `/post`, `/delete` and `/rate` accept any POST. The token therefore guards the sync handshake only (`/sync/state` answers 401 when it is configured and does not match); keep both tokens identical and keep the passive side reachable only from trusted networks.
+
 ## Run
 
 There are two ways to run the server. Both read **host and port from config.json only** - there is no command-line argument for them (change `"port"` in config.json instead).
@@ -119,6 +143,8 @@ Both run modes also write an application log to **tiltboard.log** next to the ap
 | `columns`     | cards **side by side** in each row; 1–100                                                      | `1`                              |
 | `slow_upload` | slow-network upload switch; paperclip uploads slice ~256 kB, failed chunks retry every ~30 s   | `0`                              |
 | `debug`       | extended logging switch; `1` logs every action with its parameters and chat.txt line indexes  | `0`                              |
+| `server_1_sync` | passive board to mirror, e.g. `http://10.1.1.2:8000`; set only on the active side (see [Sync](#sync-server-to-server))        | sync off                     |
+| `sync_token`    | shared secret for the sync handshake; must be identical on both machines                                        | no token gate                  |
 
 Out-of-range or non-numeric grid values fall back to the defaults (a warning is printed at startup). Pre-1.7.0 configs keep working: a legacy `max_tilts` key is read as `rows`.
 
@@ -146,4 +172,4 @@ Tiltboard was created fully by an AI agent running in **LM Studio Bionic** — e
 - **Measured speed** (decode throughput from the November 2026 server logs, per-step `tg` samples): the Q8MTP build averaged a **median of ~14.5 t/s** (mean 34.3, unstable — half of all steps below 25 t/s) over ~328k tokens; the current MTP build holds a **stable median of ~57 t/s** (p25–p75: 43–72, peaks to 109) across ~950k tokens — roughly a 4× speedup that made long agent sessions practical.
 - **Memory / KV cache:** ~40K context (40960) with flash attention and a unified, fully GPU-resident KV cache. The K cache is quantized to Q4_0 while the V cache stays at full precision — an asymmetric setup that keeps the big context affordable in VRAM without the slowdown of double-quantizing both tensors. MTP speculative decoding is enabled (draft tokens 0–3 per step). Initial settings were a Q8_0 K/V pair at 16K context; they were swapped for this configuration to fix slow response times.
 - **Hardware:** NVIDIA GeForce RTX 4090, 24 GB VRAM (driver 621.01).
-- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v1.23.0 of 2026-11-11 — 42 released versions across seven days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting, auto-linked URLs, tilt rating), and development continues.
+- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v2.0.0 of 2026-11-12 — 50 released versions across eight days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting, auto-linked URLs, tilt rating, server-to-server sync), and development continues.
