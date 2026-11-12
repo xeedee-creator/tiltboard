@@ -2,6 +2,15 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.27.0] - 2026-11-12
+
+### Added
+- **Visitor logging** — every page load now leaves one INFO line in `tiltboard.log` with the client address and whatever that browser has stored in its `tiltboard` cookie (name, style, columns, rows), e.g. `page opened by 192.168.0.7:51322 - name=Mark style=neon cols=4 rows=10`. First visits and browsers with cleared cookies get `(first visit or cleared cookies - defaults apply from config.json)`. The line is at INFO level, so it shows up even with `"debug": 0`.
+- **Favicon + executable icon** — a multi-size `app.ico` (16/24/32/48/64/128/256 px) built from `app_ico_256x256.png` is served at `/favicon.ico` (cached for one day) and embedded in `tiltboard.exe`, so the page shows a tab icon, the `.exe` gets a taskbar/file icon, and the recurring `GET /favicon.ico → 404` WARNING lines are gone. A copy of `app.ico` placed next to the program (or exe) overrides the built-in one — same convention as custom styles.
+
+### Fixed
+- The default browser request for `/favicon.ico` no longer lands on a plain 404 and floods `tiltboard.log` with WARNING lines every time somebody opens the board.
+
 ## [1.26.0] - 2026-11-12
 
 ### Added

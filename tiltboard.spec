@@ -5,7 +5,7 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('styles', 'styles'), ('config.json', 'bundled')],  # config shipped as the first-run template
+    datas=[('styles', 'styles'), ('config.json', 'bundled'), ('app.ico', '.')],  # config = first-run template; app.ico = favicon + exe icon
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -23,6 +23,7 @@ exe = EXE(
     a.datas,
     [],
     name='tiltboard',
+    icon='app.ico',  # v1.27.0
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

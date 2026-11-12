@@ -43,6 +43,13 @@ if not os.path.isdir(STYLES_DIR):
     _bundled = getattr(sys, "_MEIPASS", None)
     if _bundled and os.path.isdir(os.path.join(_bundled, "styles")):
         STYLES_DIR = os.path.join(_bundled, "styles")
+# v1.27.0: browser-tab / taskbar icon - the same file is embedded in the .exe itself,
+# and a copy next to the program (or exe) wins over the built-in one.
+FAVICON_PATH = os.path.join(BASE_DIR, "app.ico")
+if not os.path.isfile(FAVICON_PATH):
+    _bundled_fav = getattr(sys, "_MEIPASS", None)
+    if _bundled_fav and os.path.isfile(os.path.join(_bundled_fav, "app.ico")):
+        FAVICON_PATH = os.path.join(_bundled_fav, "app.ico")
 
 
 class _DebugRotatingHandler(RotatingFileHandler):
@@ -142,7 +149,7 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "1.26.0"  # v1.26.0: "debug": 1 log rotates at 10 MB into tiltboard.debug.log.0-.9; switching off saves an oversized live log once as .bak
+VERSION = "1.27.0"  # v1.27.0: who's-on-the-board logging (client address + cookies) and favicon.ico / .exe icon
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
 NUM_COLORS = 10  # each stylesheet defines its own palette for data-c="0..9"
@@ -514,6 +521,7 @@ PAGE = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tiltboard</title>
 <link id="theme" rel="stylesheet" href="/style.css">
+<link rel="icon" type="image/x-icon" href="/favicon.ico">  <!-- v1.27.0 -->
 </head>
 <body>
 <button id="searchIcon" title="Search tilts &nbsp;(n:name · f:file · c:text)" aria-pressed="false">&#128269;</button>
@@ -2001,6 +2009,22 @@ def _header_html() -> str:
     return ""
 
 
+def _visitor_from_cookie(cookie_header: str) -> tuple[str | None, str | None, str | None, str | None]:
+    """v1.27.0: decode the 'tiltboard' cookie written by the settings box - an encoded
+    query string (name=..&style=..&cols=..&rows=..) carrying only values that differ from
+    defaults. Missing or unreadable parts stay None, so a log line shows exactly what this
+    browser remembers."""
+    out = {"name": None, "style": None, "cols": None, "rows": None}
+    for part in (cookie_header or "").split(";"):
+        key, _, value = part.strip().partition("=")
+        if key == "tiltboard" and value:
+            fields = parse_qs(unquote(value))  # one unquote: JS encodes the query string once
+            for field in out:
+                if field in fields:
+                    out[field] = fields[field][0]
+    return out["name"], out["style"], out["cols"], out["rows"]
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, status: int, body: bytes = b"", headers=None) -> None:
         self.send_response(status)
@@ -2022,6 +2046,15 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path in ("/", "/index.html"):
+            # v1.27.0: who's here - client address plus whatever this browser has stored
+            host, port_no = self.client_address[0], self.client_address[1]
+            n_v, s_v, c_v, r_v = _visitor_from_cookie(self.headers.get("Cookie") or "")
+            if n_v or s_v or c_v or r_v:
+                log.info("page opened by %s:%d - name=%s style=%s cols=%s rows=%s",
+                         host, port_no, n_v, s_v, c_v, r_v)
+            else:
+                log.info("page opened by %s:%d (first visit or cleared cookies - defaults apply from config.json)",
+                         host, port_no)
             query_page = parse_qs(parsed.query).get("page", ["1"])[0]
             try:  # ?page=N picks the page to show; garbage falls back to page 1
                 requested = min(max(int(query_page), 1), total_pages())
@@ -2048,6 +2081,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, b"")
                 return
             self._send(200, body, {"Content-Type": "text/css", "Cache-Control": "no-store"})
+        elif path == "/favicon.ico":  # v1.27.0: tab icon - also ends the default 404 warning storm
+            try:
+                with open(FAVICON_PATH, "rb") as f:
+                    self._send(200, f.read(), {"Content-Type": "image/x-icon",
+                                               "Cache-Control": "public, max-age=86400"})
+            except OSError:  # icon missing on this install -> plain 404 as before
+                self._send(404, b"Not found")
         elif path == "/styles":  # theme list for the settings dropdown
             self._send(200, STYLES_JSON, {"Content-Type": "application/json"})
         elif path == "/search":  # v1.14.0: live filter of chat.txt (n:/u: name, f: file, c: body)
