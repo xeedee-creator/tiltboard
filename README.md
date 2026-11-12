@@ -76,13 +76,13 @@ Tokens separated by spaces are AND-ed, e.g. `u:john f:report.pdf` finds John's p
 
 Tiltboard can mirror another Tiltboard so two locations always hold the same board - one machine runs as the **active** side and keeps the other in step, without any database or external sync tool. Both boards keep their plain `chat.txt` + data folder; nothing about a single-board setup changes unless you opt in.
 
-| Key             | Meaning                                                                                                            | Fallback when missing |
-| --------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------- |
-| `server_1_sync` | the passive board to mirror, e.g. `http://10.1.1.2:8000`; set only on the active side                              | sync off              |
-| `sync_token`    | shared secret for the sync handshake; must be **identical on both machines**                                       | no token gate         |
-| `server_2_sync`    | reserved slot for a second remote (parsed but not used in this release)                                            | -                     |
-| `pass_full_access` | password granting full access (post, delete, rate); empty/unset = no login anywhere                                | auth off              |
-| `pass_read_only`   | optional second password: read, download and rate only; posting/deleting is server-locked for its holders          | ignored alone         |
+| Key                | Meaning                                                                               | Fallback when missing |
+| ------------------ | ------------------------------------------------------------------------------------- | --------------------- |
+| `server_1_sync`    | the passive board to mirror, e.g. `http://10.1.1.2:8000`; set only on the active side | sync off              |
+| `sync_token`       | shared secret for the sync handshake; must be **identical on both machines**          | no token gate         |
+| `server_2_sync`    | reserved slot for a second remote (parsed but not used in this release)               | -                     |
+| `pass_full_access` | password granting full access (post, delete, rate); empty/unset = no login anywhere   | auth off              |
+| `pass_read_only`   | optional second password: read, download and rate only; posting/deleting is locked    | ignored alone         |
 
 One board runs the active side and keeps the other passive: set `server_1_sync` only where the mirror is wanted. A passive board is simply a plain Tiltboard without `server_N_sync` in its config.json - it never polls anything and only accepts sync calls that carry the right token. Configuring both sides to point at each other would create two active mirrors fighting over who owns what, so do not do this.
 
@@ -135,20 +135,20 @@ Both run modes also write an application log to **tiltboard.log** next to the ap
 
 `config.json` next to `app.py` (restart required after changes):
 
-| Key           | Meaning                                                                                        | Fallback when missing or invalid |
-| ------------- | ---------------------------------------------------------------------------------------------- | -------------------------------- |
-| `host`        | bind address; `0.0.0.0` = reachable across the network                                         | `0.0.0.0`                        |
-| `port`        | HTTP port                                                                                      | `8000`                           |
-| `data_folder` | uploads + `chat.txt`; empty = auto-created `./data`, relative → from app dir, absolute → as-is | `<app>/data`                     |
-| `style`       | theme name — any file in `styles/`; default when no visitor preference (cookie) exists         | `classic`                        |
-| `rows`        | card **rows** filling one board page; 1–1000                                                   | `35`                             |
-| `columns`     | cards **side by side** in each row; 1–100                                                      | `1`                              |
-| `slow_upload` | slow-network upload switch; paperclip uploads slice ~256 kB, failed chunks retry every ~30 s   | `0`                              |
-| `debug`       | extended logging switch; `1` logs every action with its parameters and chat.txt line indexes  | `0`                              |
-| `server_1_sync`    | passive board to mirror, e.g. `http://10.1.1.2:8000`; set only on the active side (see [Sync](#sync-server-to-server)) | sync off                     |
-| `sync_token`       | shared secret for the sync handshake; must be identical on both machines                                        | no token gate                  |
-| `pass_full_access` | password granting full access (post, delete, rate); empty/unset = no login anywhere                                | auth off                     |
-| `pass_read_only`   | optional second password: read, download and rate only; posting/deleting is server-locked for its holders          | ignored alone                |
+| Key                | Meaning                                                                                                                | Fallback when missing or invalid |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| `host`             | bind address; `0.0.0.0` = reachable across the network                                                                 | `0.0.0.0`                        |
+| `port`             | HTTP port                                                                                                              | `8000`                           |
+| `data_folder`      | uploads + `chat.txt`; empty = auto-created `./data`, relative → from app dir, absolute → as-is                         | `<app>/data`                     |
+| `style`            | theme name — any file in `styles/`; default when no visitor preference (cookie) exists                                 | `classic`                        |
+| `rows`             | card **rows** filling one board page; 1–1000                                                                           | `35`                             |
+| `columns`          | cards **side by side** in each row; 1–100                                                                              | `1`                              |
+| `slow_upload`      | slow-network upload switch; paperclip uploads slice ~256 kB, failed chunks retry every ~30 s                           | `0`                              |
+| `debug`            | extended logging switch; `1` logs every action with its parameters and chat.txt line indexes                           | `0`                              |
+| `server_1_sync`    | passive board to mirror, e.g. `http://10.1.1.2:8000`; set only on the active side (see [Sync](#sync-server-to-server)) | sync off                         |
+| `sync_token`       | shared secret for the sync handshake; must be identical on both machines                                               | no token gate                    |
+| `pass_full_access` | password granting full access (post, delete, rate); empty/unset = no login anywhere                                    | auth off                         |
+| `pass_read_only`   | optional second password: read, download and rate only; posting/deleting is server-locked for its holders              | ignored alone                    |
 
 Out-of-range or non-numeric grid values fall back to the defaults (a warning is printed at startup). Pre-1.7.0 configs keep working: a legacy `max_tilts` key is read as `rows`.
 
