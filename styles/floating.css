@@ -6,7 +6,7 @@
 body {
   margin: 0;
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-  background: linear-gradient(180deg, #d9e0ec 0%, #c2cee0 60%, #a7b8cf 100%);
+  background: linear-gradient(180deg, #e9edf2 0%, #d6dde5 60%, #bfc7cf 100%); /* v1.24.1: lighter, silver-leaning */
   min-height: 100vh;
 }
 .wrap { max-width: 640px; margin: 0 auto; padding: 8px 16px 64px; }

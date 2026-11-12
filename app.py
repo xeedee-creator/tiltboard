@@ -74,7 +74,7 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "1.24.0"  # v1.24.0: debug logging - version caught up with CHANGELOG (rating shipped as 1.23.0)
+VERSION = "1.24.4"  # v1.24.4: emoji picker pair-swap - 👏↔💝 and ➤︎(U+27A4 FE0E)↔🛑 exchanged positions
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
 NUM_COLORS = 10  # each stylesheet defines its own palette for data-c="0..9"
@@ -1327,19 +1327,19 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
     "\u{1F625}","\u{1F62D}","\u{1F61E}","\u{1F61C}","\u{1F628}","\u{1F60F}","\u{1F914}",
     "\u{1F91D}","\u{1F924}","\u{1F634}","\u{1F629}","\u{1F631}","\u{1F97A}","\u{1F60D}",
     "\u{1F61A}","\u{1F61B}","\u{1F622}","\u{1F62E}","\u{1F975}","\u{1F644}",
-    "\u{1F90D}","\u{1F636}","\u{1F648}","\u{1F64B}","\u{2764}\uFE0F","\u{1F495}","\u{1F4A0}",
-    "\u{1F494}","\u{1F49A}","\u{1F49D}","\u{270C}","\u{1F596}","\u{1F44C}","\u{1F44D}",
+    "\u{1F90D}","\u{1F636}","\u{1F648}","\u{1F64B}","\u{2764}\uFE0F","\u{1F495}","\u{1F49D}",
+    "\u{1F494}","\u{1F49A}","\u{1F44F}","\u{270C}","\u{1F596}","\u{1F44C}","\u{1F44D}",
     "\u{1F44E}","\u{1F91F}","\u{1F918}","\u{270B}","\u{1FAF0}","\u{1F919}","\u{1F64F}","\u{1F4AA}","\u{1F4AF}",
     "\u{1FAF5}","\u{1F91C}","\u{1F64C}","\u{1F389}","\u{1F38A}","\u{2728}","\u{1F4AC}",
     "\u{1F525}","\u{1F60E}","\u{1F913}","\u{1F9D0}","\u{1F928}","\u{1F47A}","\u{1F47B}",
     "\u{1F47D}","\u{2620}\uFE0F","\u{1F4A9}","\u{1F431}","\u{1F432}","\u{1F98A}","\u{1F436}",
-    "\u{1F43B}","\u{1F9BF}\uFE0F","\u{1F99B}","\u{1F98E}","\u{1F42D}","\u{1F407}","\u{1F986}","\u{1F9D9}","\u{1F9A1}",
-    "\u{1F43E}","\u{1F43F}","\u{1F427}","\u{1F437}","\u{1F41F}","\u{1F95D}","\u{1F98B}",
+    "\u{1F43B}","\u{1F984}","\u{1F99B}","\u{1F98E}","\u{1F42D}","\u{1F407}","\u{1F986}","\u{1F9D9}","\u{1F9A1}",
+    "\u{1F43E}","\u{1F408}","\u{1F427}","\u{1F437}","\u{1F41F}","\u{1F95D}","\u{1F98B}",
     "\u{1F430}","\u{1F41A}","\u{1F43C}","\u{2615}","\u{1F37D}\uFE0F","\u{1F37E}","\u{1F37A}",
-    "\u{1F37B}","\u{1F354}","\u{1F951}","\u{1F95A}","\u{1F36B}","\u{1F490}","\u{274C}","\u{27A4}\uFE0F",
+    "\u{1F37B}","\u{1F354}","\u{1F951}","\u{1F95A}","\u{1F36B}","\u{1F490}","\u{274C}","\u{1F6D1}",
     "\u{2705}","\u{274E}","\u{1F382}","\u{1F9E8}","\u{26BD}","\u{1F3C0}","\u{1F440}",
-    "\u{1F30D}","\u{1F3ED}","\u{1F6A6}","\u{1F6D1}","\u{2794}\uFE0F","\u{25CB}\uFE0F",
-    "\u{25CF}\uFE0F","\u{1F31E}","\u{1F308}","\u{26A1}","\u{2744}\uFE0F","\u{1F384}",
+    "\u{1F30D}","\u{1F3ED}","\u{1F6A6}","\u{27A4}\uFE0E","\u{2794}\uFE0E","\u{25CB}\uFE0E",
+    "\u{25CF}\uFE0E","\u{1F31E}","\u{1F308}","\u{26A1}","\u{2744}\uFE0F","\u{1F384}",
     "\u{1F5A5}\uFE0F","\u{1F50D}","\u{1F4C4}","\u{2709}\uFE0F","\u{2699}\uFE0F",
     "\u{1F6AC}","\u{2622}\uFE0F"
   ];

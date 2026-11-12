@@ -2,6 +2,26 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.24.4] - 2026-11-12
+
+### Changed
+- Two pairs exchanged positions in the emoji picker library (`app.py`): ➤︎ (U+27A4 + FE0E) ↔ 🛑 (U+1F6D1), so that ➤︎ sits next to its arrow/circle siblings, and 👏 (U+1F44F Clapping Hands) ↔ 💝 (U+1F49D Heart with Ribbon), so the hand symbols form a single block. Picker order only — no functional change.
+
+## [1.24.3] - 2026-11-11
+
+### Changed
+- Three entries swapped in the emoji picker library (`app.py`): U+1F4A0 replaced by U+1F44F (👏 Clapping Hands), U+1F9BF (mechanical leg, previously rendered with a FE0F variation selector) replaced by U+1F984 (🦄 Unicorn — bare codepoint, it is emoji-default by Unicode, so no variation selector needed), and U+1F43F (chipmunk) replaced by U+1F408 (cat 🐈). Nothing else touched; the picker keeps its existing groupings.
+
+## [1.24.2] - 2026-11-11
+
+### Changed
+- Four arrow/circle symbols in the emoji picker — ➤ (U+27A4), ➔ (U+2794), ○ (U+25CB) and ● (U+25CF) — now carry U+FE0E (text presentation) instead of U+FE0F, so browsers draw them as plain monochrome glyphs matching the rest of the text symbols rather than as color emoji. Purely a picker-library change in `app.py`; nothing else touched.
+
+## [1.24.1] - 2026-11-11
+
+### Changed
+- Cosmetic tuning of the **floating** theme: its page background gradient is now a touch lighter and less blue — a silver-grey tone (`#d9e0ec → #c2cee0 → #a7b8cf` became `#e9edf2 → #d6dde5 → #bfc7cf`) while keeping the same top-to-bottom depth, so cards still read as floating on it. One line in `styles/floating.css`; every other theme is untouched.
+
 ## [1.24.0] - 2026-11-11
 
 ### Added
