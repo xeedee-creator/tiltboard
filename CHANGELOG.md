@@ -2,6 +2,30 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-11-12
+
+### Fixed
+- **Login dialog now wears the visitor's theme** — a previous build left `--line`/`--field` undefined for the overlay, so it fell back to generic white-on-black in every style. Each of the nine stylesheets (classic, floating, glass, midnight, mono, neon, paper, sunset, terminal) now carries its own v2.1.1 login block mirroring that theme's `.tilt` card: matching scrim tint behind the dialog, per-theme fill/border/shadow/glow on the card and password field, and a themed **Login** button.
+- **Hidden username field in the password form** — Chromium's a11y guidance ("Password forms should have (optionally hidden) username fields") is satisfied by a visually-absent `#loginUser` input, silencing the `[DOM]` console warning without changing any visible UI.
+
+## [2.1.0] - 2026-11-12
+
+### Added
+- **Optional password login** — two new config keys: `pass_full_access` (post, delete, rate) and `pass_read_only` (read, download, rate only). With neither set the board stays completely open as before; a read-only key alone is ignored with a startup warning, and identical passwords grant everyone full access.
+  - A correct password issues a **signed HMAC-SHA256 `tb_auth` cookie** (HttpOnly, SameSite=Lax) carrying only role + signature — no sessions, no server-side state, no timeouts: the same password simply re-signs at any time.
+  - With auth on, every data route (`/posts`, `/post`, `/delete`, `/rate`) answers **401 JSON** to unauthenticated clients and serves a themed login screen instead of the board — an overlay built from the same `.dialog` anatomy as the delete confirm, so all nine themes style it automatically. `header.html` renders on that screen too, so visitors can tell they are at the right board.
+  - **Read-only role** — the composer box, search icon and per-tilt delete ✕ disappear; rating stays allowed. The server double-checks either way: a RO cookie posting gets a distinct **403 `{"error":"read_only"}`** that the client turns into locked UI instead of an error toast.
+  - A **Login** button now sits at the right edge of the settings bar (gear icon): it re-opens the password prompt even while already logged in, which is how a visitor switches between read-only and full access without clearing anything. The box also no longer closes on every keystroke — only Enter or closing it does.
+  - Failed logins are captured as INFO lines in `tiltboard.log` (client IP, generic message), with a cheap per-IP cooldown of ~5 tries/minute answering **429** after that; a successful login clears the history for that address.
+
+### Notes
+- The sync handshake is untouched and stays token-gated. Peer writes forwarded by an active side now additionally carry an `X-Tiltboard-Pass` header holding its own `pass_full_access`; when one board authenticates, the passive side must hold the identical password or every forward is hard-rejected — a one-sided mismatch fails loudly in both logs instead of silently drifting.
+
+## [2.0.1] - 2026-11-12
+
+### Fixed
+- **Style flash on refresh** — after a post or delete the page briefly showed the config-default theme before switching to the visitor's cookie style; an inline script now applies the cookie theme synchronously in `<head>` before first paint, so no wrong-style frame is ever rendered (the later JS swap remains as-is and is idempotent).
+
 ## [2.0.0] - 2026-11-12
 
 ### Added

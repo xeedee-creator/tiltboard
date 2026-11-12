@@ -119,3 +119,17 @@ button#attachBtn { --line: #3fd9c4; --field: #151228; color: #e6f7ff; }
 .chip { color: #6ff7e2; }
 /* emoji button (v1.5.5) - identical border to the attachment icon */
 button#emojiBtn { --line: #3fd9c4; --field: #151228; color: #e6f7ff; }
+
+/* v2.1.1: themed login dialog - mirrors this theme's tilt card */
+body #loginOverlay { background: rgba(6, 4, 16, .7); }
+#loginOverlay .dialog {
+  background: #17102f; color: #e6f7ff;
+  border: 2px solid #3fd9c4; border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .6), 0 0 18px rgba(63, 217, 196, .45), inset 0 0 14px rgba(63, 217, 196, .12);
+}
+#loginOverlay #loginPass { background: #151228; border: 2px solid #3fd9c4; border-radius: 10px; color: #e6f7ff; }
+#loginOverlay .dialog button {
+  border: 2px solid #3fd9c4; background: rgba(63, 217, 196, .08); color: #e6f7ff;
+  border-radius: 10px;
+}
+#loginOverlay #loginGo { background: #3fd9c4; border-color: #3fd9c4; color: #0a1520; box-shadow: 0 0 14px rgba(63, 217, 196, .6); }

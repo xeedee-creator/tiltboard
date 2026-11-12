@@ -9,7 +9,7 @@ A tiny single-file web app (Python stdlib only, no dependencies). Type text in t
 
 A file share, a chat and a bulletin board on one page - with none of the usual ceremony:
 
-- **No login, no database** - open the page and post. Your *Name* badge, style and rows/columns live in browser cookies; new visitors set them once from the settings box.
+- **Login only when you want one, never a database** - open boards stay exactly that: open the page and post. Set `pass_full_access` (optionally `pass_read_only`) in config.json to put a themed login screen in front of everything, with an optional read-only mode for visitors who just browse and react; either way your *Name* badge, style and rows/columns live in browser cookies.
 - **Runs as a plain .exe** - `tiltboard.exe` needs nothing but Windows x64: double-click and it serves itself, reading config.json, chat.txt and styles/ right next to it.
 - **The whole history is one text file** - every post is one line in `chat.txt`, human-readable, diff-able and portable; restart the server and everything comes back.
 - **Share big files without thinking about it** - drag & drop or paste small ones straight onto the box; for anything over 256 MB attach with the paperclip and watch progress fill the text box while ~8 MB slices stream in the background.
@@ -80,7 +80,9 @@ Tiltboard can mirror another Tiltboard so two locations always hold the same boa
 | --------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------- |
 | `server_1_sync` | the passive board to mirror, e.g. `http://10.1.1.2:8000`; set only on the active side                              | sync off              |
 | `sync_token`    | shared secret for the sync handshake; must be **identical on both machines**                                       | no token gate         |
-| `server_2_sync` | reserved slot for a second remote (parsed but not used in this release)                                            | -                     |
+| `server_2_sync`    | reserved slot for a second remote (parsed but not used in this release)                                            | -                     |
+| `pass_full_access` | password granting full access (post, delete, rate); empty/unset = no login anywhere                                | auth off              |
+| `pass_read_only`   | optional second password: read, download and rate only; posting/deleting is server-locked for its holders          | ignored alone         |
 
 One board runs the active side and keeps the other passive: set `server_1_sync` only where the mirror is wanted. A passive board is simply a plain Tiltboard without `server_N_sync` in its config.json - it never polls anything and only accepts sync calls that carry the right token. Configuring both sides to point at each other would create two active mirrors fighting over who owns what, so do not do this.
 
@@ -94,7 +96,7 @@ From the difference between both sides it reconciles chat.txt and the data folde
 
 Every chat.txt line carries a stable short ID at its very end so both sides can match lines without trusting text equality (plain boards never see it). When sync first switches on, existing lines get IDs once and for all - the backfill is idempotent, nothing is re-stamped. While files are mid-download they stay invisible: dot-prefixed staging names never reach listings or downloads, only a log line tracks their progress.
 
-Security note: Tiltboard has no login by design - `/post`, `/delete` and `/rate` accept any POST. The token therefore guards the sync handshake only (`/sync/state` answers 401 when it is configured and does not match); keep both tokens identical and keep the passive side reachable only from trusted networks.
+Security note: Tiltboard has no login **by default** - authentication switches on only when `pass_full_access` is set in config.json (an optional `pass_read_only` adds a browse-and-react tier, see [Configuration](#configuration)). With it off everything behaves exactly as before. With it on, `/post`, `/delete` and `/rate` require the signed role cookie (`/login` issues it), unauthenticated clients get 401 JSON plus a themed login screen instead of the board, and a read-only visitor who tries to post or delete gets a distinct 403 that renders as locked controls rather than an error toast. The token keeps guarding the sync handshake only - `/sync/state` answers 401 when it is configured and does not match; keep both tokens identical and keep the passive side reachable only from trusted networks.
 
 ## Run
 
@@ -143,14 +145,18 @@ Both run modes also write an application log to **tiltboard.log** next to the ap
 | `columns`     | cards **side by side** in each row; 1–100                                                      | `1`                              |
 | `slow_upload` | slow-network upload switch; paperclip uploads slice ~256 kB, failed chunks retry every ~30 s   | `0`                              |
 | `debug`       | extended logging switch; `1` logs every action with its parameters and chat.txt line indexes  | `0`                              |
-| `server_1_sync` | passive board to mirror, e.g. `http://10.1.1.2:8000`; set only on the active side (see [Sync](#sync-server-to-server))        | sync off                     |
-| `sync_token`    | shared secret for the sync handshake; must be identical on both machines                                        | no token gate                  |
+| `server_1_sync`    | passive board to mirror, e.g. `http://10.1.1.2:8000`; set only on the active side (see [Sync](#sync-server-to-server)) | sync off                     |
+| `sync_token`       | shared secret for the sync handshake; must be identical on both machines                                        | no token gate                  |
+| `pass_full_access` | password granting full access (post, delete, rate); empty/unset = no login anywhere                                | auth off                     |
+| `pass_read_only`   | optional second password: read, download and rate only; posting/deleting is server-locked for its holders          | ignored alone                |
 
 Out-of-range or non-numeric grid values fall back to the defaults (a warning is printed at startup). Pre-1.7.0 configs keep working: a legacy `max_tilts` key is read as `rows`.
 
 **Windows paths.** A full path must double every backslash — `"D:\\Data\\Share\\"` — because a single `\D`, `\i`, … would be an invalid JSON escape and the file stops parsing. Forward slashes need no escaping at all (`"D:/Data/Share/"`) and work equally well; either form is fine.
 
 **Slow uploads (`slow_upload`).** With the key absent or `0`, everything behaves exactly as before. Set to `1` on a machine whose uploads routinely drop mid-transfer: every paperclip upload then slices at ~256 kB instead of 8 MB (the progress bar simply updates more often), and any chunk that fails is retried at its own byte offset about every 30 seconds — the server seeks to that exact position, so repeating a chunk can never duplicate bytes — until it lands or the tab is closed; there is no give-up count. Direct drops/pastes (≤ 256 MB) and everything else are untouched.
+
+**Optional password login (`pass_full_access`, `pass_read_only`).** Both empty or missing = the board stays wide open and nothing about it changes. Set at least one: a correct password issues a signed HMAC-SHA256 cookie carrying only role + signature - no sessions, no timeouts on either side, so re-login with any password simply re-signs. Full access (post/delete/rate) comes from `pass_full_access`; `pass_read_only` additionally grants a read-only tier (read, download and rate only). A read-only key alone is ignored with a startup warning - it needs its full-access counterpart to exist. Identical passwords make every visitor full-access. With auth on, unauthenticated clients receive 401 JSON plus a themed login screen instead of the board; failed attempts are logged (client IP) and ~5 rapid failures per address get HTTP 429 until the minute rolls over.
 
 **Per-user override.** The gear icon's settings box offers *Rows* and *Columns* next to *Name* and *Style*. Saved values go into the visitor's browser cookie (`tiltboard`) and beat the config file; new visitors start from the config defaults. Changing the grid reloads the page, re-paginates at that user's own page size (rows × columns), and lays cards out row-major — newest top-left, filling right along each row, oldest of the page bottom-right — with the arrow pair kept for stepping through older pages client-side (no full reload).
 
@@ -172,4 +178,4 @@ Tiltboard was created fully by an AI agent running in **LM Studio Bionic** — e
 - **Measured speed** (decode throughput from the November 2026 server logs, per-step `tg` samples): the Q8MTP build averaged a **median of ~14.5 t/s** (mean 34.3, unstable — half of all steps below 25 t/s) over ~328k tokens; the current MTP build holds a **stable median of ~57 t/s** (p25–p75: 43–72, peaks to 109) across ~950k tokens — roughly a 4× speedup that made long agent sessions practical.
 - **Memory / KV cache:** ~40K context (40960) with flash attention and a unified, fully GPU-resident KV cache. The K cache is quantized to Q4_0 while the V cache stays at full precision — an asymmetric setup that keeps the big context affordable in VRAM without the slowdown of double-quantizing both tensors. MTP speculative decoding is enabled (draft tokens 0–3 per step). Initial settings were a Q8_0 K/V pair at 16K context; they were swapped for this configuration to fix slow response times.
 - **Hardware:** NVIDIA GeForce RTX 4090, 24 GB VRAM (driver 621.01).
-- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v2.0.0 of 2026-11-12 — 50 released versions across eight days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting, auto-linked URLs, tilt rating, server-to-server sync), and development continues.
+- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v2.1.1 of 2026-11-12 — 54 released versions across eight days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting, auto-linked URLs, tilt rating, server-to-server sync, optional password login), and development continues.

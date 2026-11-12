@@ -21,6 +21,7 @@ import re
 import socket
 import sys
 import hashlib
+import hmac  # v2.1.0: signed tb_auth cookie (no session table)
 import threading  # v2.0.0: shared lock for every chat.txt write + the sync worker thread
 import email.policy
 from email.parser import BytesParser  # cgi module is gone on Python >= 3.13
@@ -154,8 +155,8 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "2.0.0"  # v2.0.0: server-to-server repository sync - per-line IDs, /sync/state handshake,
-# remote-wins mirroring of chat.txt and data files with Range-resuming downloads
+VERSION = "2.1.1"  # v2.1.x: optional password login (pass_full_access/pass_read_only) - signed tb_auth cookie,
+# themed login dialog in every style, settings-bar Login button for role switching
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
 NUM_COLORS = 10  # each stylesheet defines its own palette for data-c="0..9"
@@ -228,9 +229,14 @@ def load_config() -> dict:
     token = str(raw.get("sync_token", "") or "").strip()
     if token and not re.search(r"[!-~]{16,}", token):   # a weak token fails closed - flag it at boot once
         log.warning("short/weak 'sync_token' in config.json - use a long random string on both servers")
+    pass_full = str(raw.get("pass_full_access", "") or "").strip()  # v2.1.0: optional password auth - empty pair stays fully open
+    pass_ro = str(raw.get("pass_read_only", "") or "").strip()
+    if pass_ro and not pass_full:
+        log.warning("'pass_read_only' without 'pass_full_access' is ignored - the board stays open")  # user rule: RO alone does nothing
     return {"host": host, "port": port, "data_folder": data_folder,
             "rows": rows, "columns": columns, "style": style, "slow_upload": low,
-            "server_1_sync": server_1, "server_2_sync": server_2, "sync_token": token}
+            "server_1_sync": server_1, "server_2_sync": server_2, "sync_token": token,
+            "pass_full_access": pass_full, "pass_read_only": pass_ro}
 
 
 def _bundled_config() -> str | None:
@@ -267,7 +273,9 @@ def ensure_default_config() -> None:
                 payload = {"host": "0.0.0.0", "port": 8000, "data_folder": "",
                            "rows": DEFAULT_ROWS, "columns": DEFAULT_COLUMNS,
                            "style": "classic", "slow_upload": 0,
-                           "debug": 0}
+                           "debug": 0,
+                           # v2.1.0: optional password auth - empty values keep the board fully open
+                           "pass_full_access": "", "pass_read_only": ""}
                 json.dump(payload, f, indent=2)
             else:
                 f.write(text)
@@ -295,6 +303,43 @@ PAGE_SIZE = ROWS * COLUMNS  # default page size; visitors may override via cooki
 _chat_lock = threading.Lock()
 SYNC_REMOTE = CONFIG["server_1_sync"]   # "" -> pure single-server mode, zero overhead
 SYNC_TOKEN = CONFIG["sync_token"]       # both servers must hold the same string
+AUTH_FULL = CONFIG["pass_full_access"]  # v2.1.0: password granting full access (post/delete/rate/download/read)
+AUTH_RO = CONFIG["pass_read_only"]      # different non-empty value -> read-only role; identical to AUTH_FULL -> grants full
+AUTH_ENABLED = bool(AUTH_FULL)          # empty full-password means no auth at all, whatever pass_read_only holds
+# Secret is derived from the two password strings themselves - no third key to manage, no DB.
+# Changing either configured password invalidates every cookie issued before (by design).
+_AUTH_SECRET = hashlib.sha256((AUTH_FULL + "|" + AUTH_RO).encode("utf-8")).digest() if AUTH_ENABLED else b""
+_LOGIN_FAILS: dict[str, list[float]] = {}   # v2.1.0: per-IP failed-login timestamps (cheap brute-force cooldown)
+
+
+def _auth_sign(role: str) -> str:
+    """HMAC-SHA256 of the role string - the value stored in the HttpOnly tb_auth cookie."""
+    return hmac.new(_AUTH_SECRET, role.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _auth_role(cookie_header: str) -> str | None:
+    """'full'/'ro' when a verifying tb_auth cookie is present, else None. Open board = always full."""
+    if not AUTH_ENABLED:
+        return "full"
+    for part in (cookie_header or "").split(";"):
+        key, sep, value = part.strip().partition("=")
+        if key == "tb_auth":
+            role, dot, sig = value.partition(".")
+            if dot and role in ("full", "ro") and hmac.compare_digest(sig, _auth_sign(role)):
+                return role
+    return None
+
+
+def _login_ok(password: str) -> str | None:
+    """Role for a candidate password. An identical pass_read_only grants full too (user rule).
+    Constant-time compares only - no early exit on mismatch."""
+    if not AUTH_ENABLED or not password:
+        return "full" if not AUTH_ENABLED else None
+    if hmac.compare_digest(password, AUTH_FULL):
+        return "full"
+    if AUTH_RO and hmac.compare_digest(password, AUTH_RO):
+        return "ro"
+    return None
 # v2.0.0: every local chat.txt commit (post/rate/delete) wakes the sync worker via
 # _sync_dirty() so a change is mirrored within one tick instead of waiting out ~3 s.
 _sync_wake = threading.Event()
@@ -631,6 +676,11 @@ def parse_multipart(body: bytes, content_type: str):
     return fields, files
 
 
+# v2.1.x - no separate login document any more: unauthenticated visitors get this very page
+# (PAGE below) with __POSTS__/pagers baked empty, plus an inline script that reveals the themed
+# #loginOverlay and hides composer/search/pager. The gear icon keeps working pre-login, header.html
+# renders, and /style.css themes everything like a normal card. /login sets the signed cookie;
+# location.replace('/') then re-enters do_GET with that role and fills the board.
 PAGE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -638,6 +688,25 @@ PAGE = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tiltboard</title>
 <link id="theme" rel="stylesheet" href="/style.css">
+<script>  /* v2.0.1 hotfix: apply the cookie theme synchronously, before first paint - kills the
+   flash of the config-default style that used to show for a moment after every refresh */
+(function () {
+  try {
+    for (const part of document.cookie.split(";")) {
+      const idx = part.indexOf("=");
+      if (idx > -1 && part.slice(0, idx).trim() === "tiltboard") {
+        const s = new URLSearchParams(decodeURIComponent(part.slice(idx + 1))).get("style");
+        if (s) document.getElementById("theme").href = "/style.css?name=" + encodeURIComponent(s);
+      }
+    }
+  } catch (e) {}
+})();
+</script>
+<script>/* v2.1.x: pre-login visitors still get this document (themed, gear icon live) but the server
+   bakes the card area empty and sets TB_AUTH_MODE; the script at <body> start then reveals the
+   themed login dialog and hides composer/search/pager until /login issues a signed cookie. */
+window.TB_AUTH_MODE = __AUTH_MODE__;
+</script>
 <link rel="icon" type="image/x-icon" href="/favicon.ico">  <!-- v1.27.0 -->
 </head>
 <body>
@@ -651,6 +720,7 @@ PAGE = r"""<!DOCTYPE html>
   <div class="row"><label for="styleSelect">Style</label><select id="styleSelect"></select></div>
   <div class="row"><label for="colsInput" title="How many cards sit side by side in one row">Columns</label><input id="colsInput" type="number" min="1" max="100"></div>
   <div class="row"><label for="rowsInput" title="How many rows of cards fill one page">Rows</label><input id="rowsInput" type="number" min="1" max="1000"></div>
+  <div class="row"><label></label><button id="reloginBtn" type="button" hidden>Login</button></div>
   <p class="hint">Changes are saved to your browser (cookie) and applied on reload.</p>
 </div>
 
@@ -659,6 +729,21 @@ PAGE = r"""<!DOCTYPE html>
     <p id="delMsg"></p>
     <div class="btns"><button id="delYes">Delete</button><button id="delNo">Cancel</button></div>
   </div>
+</div>
+
+<!-- v2.1.x: pre-login shell - same .dialog anatomy as the delete dialog, so every theme styles it -->
+<div id="loginOverlay" class="hidden" aria-hidden="true">
+  <form id="loginForm" class="dialog">
+    <!-- Chromium a11y asks password forms to carry an (optionally hidden) username field;
+         .sr-only keeps it in the DOM but visually absent. See styles note v2.1.x -->
+    <input id="loginUser" class="sr-only" type="text" autocomplete="username"
+           aria-hidden="true" tabindex="-1">
+    <p><b>Tiltboard</b> &mdash; access required</p>
+    <input id="loginPass" type="password" maxlength="128" autocomplete="current-password"
+           placeholder="Access password" aria-label="Access password">
+    <p class="hint" id="loginMsg"></p>
+    <div class="btns"><button id="loginGo" type="submit">Unlock</button></div>
+  </form>
 </div>
 
 <div class="wrap">
@@ -683,10 +768,61 @@ __POSTS__
 __ARROWS_BOTTOM__
 </div>
 
+<script>/* v2.1.x: runs after all board markup is parsed - an unlocked visitor sees only the
+   (themed) login dialog and the settings gear; composer/search/pager stay hidden until the
+   signed cookie from /login arrives on location.replace('/'). */
+window.TB_AUTH_ENABLED = __AUTH_ENABLED__;  // auth configured at all - Login button in settings even when logged in
+  var relock = function () {  // v2.1.x: shared by the locked-page reveal AND the Login button (re-lock while logged in)
+    var w = document.querySelector(".wrap"); if (w) w.style.display = "none";
+    ["searchIcon", "searchInput"].forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = "none"; });
+    var sbx = document.getElementById("settingsBox");
+    if (sbx) {
+      if (!sbx.classList.contains("hidden")) sbx.setAttribute("data-relocked", "1");  // remember we closed it, so dismiss can reopen
+      sbx.classList.add("hidden"); sbx.setAttribute("aria-hidden", "true");
+    }
+    var lo = document.getElementById("loginOverlay");
+    lo.classList.remove("hidden");
+    lo.setAttribute("aria-hidden", "false");
+    document.getElementById("loginPass").focus();
+  };
+  var rb = document.getElementById("reloginBtn");   // v2.1.x: Login button in settings - also for logged-in users
+  if (rb) { rb.hidden = !window.TB_AUTH_ENABLED; if (window.TB_AUTH_ENABLED) rb.onclick = relock; }
+  if (window.TB_AUTH_MODE) {
+    document.querySelectorAll(".composer, .pager, #searchIcon, #searchInput, .arrow")
+      .forEach(function (el) { el.style.display = "none"; });
+    relock();
+  }
+  // v2.1.x: a logged-in user who re-locked via the Login button can walk away again -
+  // Escape or a click on the backdrop restores exactly what relock() hid (the board,
+  // search icons, settings box). Locked visitors just get their locked screen back.
+  var loEl = document.getElementById("loginOverlay"), lfEl = document.getElementById("loginForm");
+  function dismissLogin() {
+    if (!loEl || loEl.classList.contains("hidden")) return;
+    loEl.classList.add("hidden"); loEl.setAttribute("aria-hidden", "true");
+    var w = document.querySelector(".wrap"); if (w) w.style.display = window.TB_AUTH_MODE ? "none" : "";
+    ["searchIcon", "searchInput"].forEach(function (id) {
+      var el = document.getElementById(id); if (el) el.style.display = window.TB_AUTH_MODE ? "none" : ""; });
+    var sbx = document.getElementById("settingsBox");
+    if (sbx && sbx.getAttribute("data-relocked") === "1") {
+      sbx.classList.remove("hidden"); sbx.setAttribute("aria-hidden", "false");
+      sbx.removeAttribute("data-relocked");
+    }
+  }
+  if (loEl) {
+    loEl.addEventListener("click", function (e) { if (e.target === loEl) dismissLogin(); });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !loEl.classList.contains("hidden") && lfEl && !lfEl.classList.contains("busy")) {
+        e.preventDefault(); dismissLogin();
+      }
+    });
+  }
+</script>
 <script>window.DEFAULT_STYLE = "__DEFAULT_STYLE__";
 window.DEFAULT_ROWS = __DEFAULT_ROWS__;
 window.DEFAULT_COLUMNS = __DEFAULT_COLUMNS__;
-window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
+window.SLOW_UPLOAD = __SLOW_UPLOAD__;
+window.TB_RO = __RO_ROLE__;  // v2.1.0: read-only visitor - composer and delete crosses vanish
+if (window.TB_RO) { document.querySelectorAll(".composer, .del").forEach(function (el) { el.style.display = "none"; }); };</script>
 <script>
 // Settings live in a browser cookie - the server never sees them.
 (function () {
@@ -729,6 +865,7 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
       : COOKIE + "=;path=/;max-age=0";  // back to defaults -> forget the cookie
   }
 
+  // First visit: pre-fill from cookie or defaults, then reveal the settings box below.
   const saved = readCookie();
   const name = (saved && saved.get("name")) || DEFAULT_NAME;
   const style = (saved && saved.get("style")) || window.DEFAULT_STYLE;
@@ -1045,6 +1182,31 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
   });
 })();
 </script>
+<script>/* v2.1.x: submit -> /login -> fresh '/' carrying the signed tb_auth cookie */
+(function () {
+  const form = document.getElementById("loginForm");
+  // v2.1.x: guard on TB_AUTH_ENABLED, not TB_AUTH_MODE - the latter is only baked into the
+  // pre-login document, so a logged-in user re-locking via the settings Login button had no
+  // working submit and could not dismiss the dialog ("can't be closed" bug). With this guard,
+  // Enter/backdrop/Esc all work on both paths.
+  if (!form || !window.TB_AUTH_ENABLED) return;
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    const msg = document.getElementById("loginMsg");
+    const pass = document.getElementById("loginPass").value;
+    fetch("/login", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: pass }) }
+    ).then(function (r) { return r.text().then(function (t) {
+        let j = null; try { j = JSON.parse(t); } catch (_) {}
+        if (!j || !j.ok) throw new Error(j && j.error ? j.error : "login failed");
+        location.replace("/");
+      }); }).catch(function (err) {
+      msg.textContent = String(err.message || err);
+      document.getElementById("loginPass").focus();
+    });
+  });
+})();
+</script>
 <script>
 // Live update: poll /posts every 3 seconds and refresh only the board,
 // so other people's posts appear without a manual page reload.
@@ -1309,6 +1471,7 @@ window.SLOW_UPLOAD = __SLOW_UPLOAD__;</script>
   }
 
   async function poll() {
+    if (window.TB_AUTH_MODE) return;  // v2.1.x: locked visitor - /posts would only ever 401
     if (window.tiltSearchActive && window.tiltSearchActive()) return;  // v1.14.0: filter owns the board
     try {
       const res = await fetch(postsUrl(), { cache: "no-store" });
@@ -1747,8 +1910,17 @@ button#emojiBtn:hover { transform: scale(1.12) rotate(-8deg); transition: transf
 .dialog button { padding: 7px 18px; border-radius: 8px; cursor: pointer;
   font-size: 14px; font-weight: 600; border: 1px solid var(--line, #999);
   background: var(--field, #fff); color: inherit; }
-#delYes { background: #c2503f; border-color: #a83e2f; color: #fff; }
+#loginOverlay { position: fixed; inset: 0; z-index: 70; display: flex;
+  align-items: center; justify-content: center; background: rgba(0, 0, 0, .45); }
+#loginOverlay.hidden { display: none !important; }
+#loginPass { width: 100%; box-sizing: border-box; padding: 8px 12px; margin-bottom: 6px;
+  border-radius: 8px; border: 1px solid var(--line, #999); background: var(--field, #fff);
+  color: inherit; font-size: 14px; }
+#loginGo { width: 100%; margin-top: 6px; }
 #delNo:hover { opacity: .75; }
+/* v2.1.x: screen-reader-only helper (login form's hidden username field) */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 /* v1.17.0: the jump-5 arrows are two inline spans - without nowrap a narrow box
    wraps them onto two lines (the "falling apart" seen on phones). Desktop never
    wrapped because it fits, so this changes nothing visually there */
@@ -1804,6 +1976,16 @@ button#emojiBtn:hover { transform: scale(1.12) rotate(-8deg); transition: transf
   overflow-wrap: anywhere; }
 .text a.lnk:hover { filter: brightness(1.12); }
 </style>
+<script>/* v2.1.x: last-resort pass - whatever ran earlier (IIFEs, poller, cache),
+   the locked page must end up with only the login dialog + settings gear visible.
+   Runs after every other script on the page, so no later code can un-hide these. */
+if (window.TB_AUTH_MODE) {
+  document.querySelectorAll(".composer, .pager, #searchIcon, #searchInput, .arrow")
+    .forEach(function (el) { el.style.display = "none"; });
+  var lo2 = document.getElementById("loginOverlay");
+  if (lo2 && !window.__TB_UNLOCKED__) lo2.classList.remove("hidden");
+}
+</script>
 </body>
 </html>
 """
@@ -2187,7 +2369,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/sync/state":
             self._handle_sync_state()
             return
+        if AUTH_ENABLED and path.startswith(("/search", "/posts", "/files/")):
+            # v2.1.0: data routes need a valid role; the shell page stays open so its baked-in
+            # flag can render the login dialog before anything is served to unauthenticated users
+            if _auth_role(self.headers.get("Cookie") or "") is None:
+                self._send(401, json.dumps({"ok": False, "error": "login required"}).encode("utf-8"),
+                           {"Content-Type": "application/json", "Cache-Control": "no-store"})
+                return
         if path in ("/", "/index.html"):
+            role_now = _auth_role(self.headers.get("Cookie") or "")  # 'full' on open boards, else 'full'/'ro'/None
+            # v2.1.x: no valid cookie -> same shell page with the card area baked empty; the
+            # script at <body> start then reveals the themed login overlay (composer, search and
+            # pagers stay hidden until /login succeeds and location.replace('/') re-enters here).
+            locked = AUTH_ENABLED and role_now is None
             # v1.27.0: who's here - client address plus whatever this browser has stored
             host, port_no = self.client_address[0], self.client_address[1]
             n_v, s_v, c_v, r_v = _visitor_from_cookie(self.headers.get("Cookie") or "")
@@ -2202,14 +2396,18 @@ class Handler(BaseHTTPRequestHandler):
                 requested = min(max(int(query_page), 1), total_pages())
             except ValueError:
                 requested = 1
-            pager = render_pager(requested, total_pages())
-            page = PAGE.replace("__POSTS__", render_posts(requested))
+            pager = "" if locked else render_pager(requested, total_pages())
+            page = PAGE.replace("__POSTS__", "" if locked else render_posts(requested))
             page = (page.replace("__ARROWS_TOP__", pager).replace("__ARROWS_BOTTOM__", pager))
             page = (page.replace("__HEADER__", _header_html())           # optional top frame
                     .replace("__DEFAULT_STYLE__", STYLE_NAME)      # dropdown default
                     .replace("__DEFAULT_ROWS__", str(ROWS))
                     .replace("__DEFAULT_COLUMNS__", str(COLUMNS))
                     .replace("__SLOW_UPLOAD__", str(SLOW_UPLOAD)))       # v1.22.0: slow-network upload switch
+            # role_now was computed at the top of this branch; locked visitors see only the overlay.
+            page = page.replace("__AUTH_MODE__", "true" if locked else "false")
+            page = page.replace("__RO_ROLE__", str(role_now == "ro").lower())  # v2.1.0: hide composer + delete crosses
+            page = page.replace("__AUTH_ENABLED__", "true" if AUTH_ENABLED else "false")  # v2.1.x: Login button visibility
             body = page.encode("utf-8")
             # v1.18.1: no-store - the grid (rows/cols) and all settings logic live in this
             # document's inline JS, so a heuristically cached copy would silently ignore the
@@ -2306,8 +2504,33 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"Not found")
 
+    def _auth_gate(self) -> str | None:
+        """v2.1.0 - role for this request ('full'/'ro'), or None after a 401 JSON body was sent."""
+        role = _auth_role(self.headers.get("Cookie") or "")
+        if role is not None:
+            return role
+        self._send(401, json.dumps({"ok": False, "error": "login required"}).encode("utf-8"),
+                   {"Content-Type": "application/json", "Cache-Control": "no-store"})
+        return None
+
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/login":  # v2.1.0: password -> signed tb_auth cookie (open board: always ok)
+            self._handle_login()
+            return
+        peer_pass = self.headers.get("X-Tiltboard-Pass")  # v2.1.0: forwarded write from the sync worker
+        if peer_pass is not None and not hmac.compare_digest(peer_pass, AUTH_FULL):
+            # no local human sends this header - one-sided config or wrong credential -> hard refuse
+            self._send(401, json.dumps({"ok": False, "error": "sync credential mismatch"}).encode("utf-8"),
+                       {"Content-Type": "application/json", "Cache-Control": "no-store"})
+            return
+        role = "full" if (peer_pass is not None and AUTH_FULL) else self._auth_gate()  # open board -> 'full'; forwarded peer write skips the cookie gate
+        if role == "ro" and parsed.path != "/rate":
+            # v2.1.0: read-only may only rate - post/delete/upload get a distinct body the client
+            # turns into locked UI instead of an error toast (the composer is hidden for RO anyway)
+            self._send(403, json.dumps({"ok": False, "error": "read_only"}).encode("utf-8"),
+                       {"Content-Type": "application/json", "Cache-Control": "no-store"})
+            return
         if parsed.path == "/delete":    # v1.5.4: remove one tilt + its source file
             self._handle_delete()
             return
@@ -2358,6 +2581,40 @@ class Handler(BaseHTTPRequestHandler):
             _pending_actions.put(("post", {"text": message, "attach": stored_name}))
         self._send(302, headers={"Location": "/"})
 
+    def _handle_login(self):
+        """v2.1.0 POST /login - verify password and issue a signed HttpOnly tb_auth cookie."""
+        if not AUTH_ENABLED:  # open board: accept anything, return the full role for uniformity
+            self._send(200, json.dumps({"ok": True, "role": "full"}).encode("utf-8"),
+                       {"Content-Type": "application/json"})
+            return
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        try:
+            password = str(json.loads(self.rfile.read(length) or b"{}").get("password") or "")
+        except (ValueError, UnicodeDecodeError):
+            self._send(400, json.dumps({"ok": False, "error": "bad request"}).encode("utf-8"),
+                       {"Content-Type": "application/json"})
+            return
+        now = time.time()
+        ip = self.client_address[0]
+        fails = [t for t in _LOGIN_FAILS.get(ip, []) if now - t < 60.0]  # sweep stale entries
+        _LOGIN_FAILS[ip] = fails
+        if len(fails) >= 5:  # cheap brute-force cooldown ~5 attempts / minute per IP
+            self._send(429, json.dumps({"ok": False, "error": "too many tries"}).encode("utf-8"),
+                       {"Content-Type": "application/json"})
+            return
+        role = _login_ok(password)
+        if role is None:
+            fails.append(now)
+            log.info("login failed from %s", ip)  # generic message - don't leak which roles exist
+            self._send(401, json.dumps({"ok": False, "error": "bad password"}).encode("utf-8"),
+                       {"Content-Type": "application/json"})
+            return
+        _LOGIN_FAILS.pop(ip, None)  # success clears the failure history for this IP
+        cookie = f"tb_auth={role}.{_auth_sign(role)}; HttpOnly; SameSite=Lax; Path=/"
+        log.info("login ok from %s (role=%s)", ip, role)
+        self._send(200, json.dumps({"ok": True, "role": role}).encode("utf-8"),
+                   {"Content-Type": "application/json", "Set-Cookie": cookie})
+
     # --- v2.0.0 sync handshake -------------------------------------------------
 
     def _handle_sync_state(self):
@@ -2377,6 +2634,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(401, json.dumps({"ok": False, "error": "sync token mismatch"}).encode(),
                            {"Content-Type": "application/json", "Cache-Control": "no-store"})
                 return
+        provided_pass = self.headers.get("X-Tiltboard-Pass", "")  # v2.1.0: peer credential
+        if not hmac.compare_digest(provided_pass, AUTH_FULL):  # both empty -> open sync; one-sided or wrong -> refuse
+            self._send(401, json.dumps({"ok": False, "error": "sync credential mismatch"}).encode(),
+                       {"Content-Type": "application/json", "Cache-Control": "no-store"})
+            return
         backfill_line_ids()  # idempotent: no-op when every line already carries its ID
         lines = {}
         with _chat_lock:
@@ -2679,6 +2941,8 @@ def _sync_headers() -> dict:
     headers = {"User-Agent": "TiltboardSync/" + VERSION}
     if SYNC_TOKEN:
         headers["X-Tiltboard-Sync"] = SYNC_TOKEN
+    if AUTH_FULL:  # v2.1.0: pass_full_access doubles as the peer credential for every sync call
+        headers["X-Tiltboard-Pass"] = AUTH_FULL
     return headers
 
 
@@ -2976,6 +3240,9 @@ def main():
     restore_posts()
     if SYNC_REMOTE:  # v2.0.0 active side - start the sync daemon before serving
         threading.Thread(target=_sync_worker, name="tiltboard-sync", daemon=True).start()
+        if not AUTH_FULL:  # v2.1.0: a password-protected peer will refuse our uncredentialed sync calls
+            log.warning("server_1_sync set but pass_full_access empty - "
+                        "a password-protected peer board will reject this server's sync")
     try:
         server = ThreadingHTTPServer((HOST, PORT), Handler)
     except OSError as e:  # port already in use etc. - record it instead of dying silently

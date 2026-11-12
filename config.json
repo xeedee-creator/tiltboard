@@ -6,5 +6,7 @@
   "columns": 3,
   "style": "neon",
   "slow_upload": 0,
+  "pass_full_access": "pivo", 
+  "pass_read_only": "q",
   "debug": 0
 }
