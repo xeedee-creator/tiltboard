@@ -2,6 +2,11 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.4] - 2026-11-13
+
+### Fixed
+- **No more flash of the plain, unstyled board during page reload** — every mutation (posting, deleting, switching style or rows/columns) triggers a full-page reload; since all tilts and images are baked into the HTML server-side while the theme stylesheet (`/style.css`) loads asynchronously, the browser briefly painted one frame of raw text and bare pictures before the theme applied. The shared inline CSS now keeps `body` at `visibility: hidden` until an inline head script raises an `html.tb-loaded` flag once `/style.css` is in effect — via the stylesheet's load/error events plus a quick `document.styleSheets` check for already-cached sheets that skip firing the load event. No theme file was touched (all nine styles only set CSS variables, so the guard works with every theme) and the page can never stay hidden: an errored stylesheet raises the flag too.
+
 ## [2.1.3] - 2026-11-13
 
 ### Fixed

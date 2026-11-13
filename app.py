@@ -155,7 +155,8 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "2.1.3"  # v2.1.3: constant black font color for all emoji-component cells in every style;
+VERSION = "2.1.4"  # v2.1.4: hide unstyled board flash during page reload (FOUC guard);
+# v2.1.3: constant black font color for all emoji-component cells in every style;
 # v2.1.2: header.html stays visible on the login screen (locked page keeps .wrap open);
 # v2.1.x: optional password login (pass_full_access/pass_read_only) - signed tb_auth cookie,
 # themed login dialog in every style, settings-bar Login button for role switching
@@ -702,6 +703,20 @@ PAGE = r"""<!DOCTYPE html>
       }
     }
   } catch (e) {}
+})();
+</script>
+<script>/* v2.1.4: raise html.tb-loaded the moment /style.css is applied - the shared CSS below keeps
+   body invisible until then, so a reload (post/delete/style/rows-cols) never flashes plain text +
+   raw pictures for one frame. 'error' reveals too, so a missing theme file cannot hide it forever.
+   The styleSheets poll covers cached stylesheets that skip the load event. */
+(function () {
+  function ready() { document.documentElement.classList.add("tb-loaded"); }
+  var l = document.getElementById("theme");
+  if (l) { l.addEventListener("load", ready); l.addEventListener("error", ready); }
+  (function check() {
+    for (var s of document.styleSheets) if ((s.href || "").indexOf("/style.css") > -1) return ready();
+    setTimeout(check, 5);
+  })();
 })();
 </script>
 <script>/* v2.1.x: pre-login visitors still get this document (themed, gear icon live) but the server
@@ -1740,6 +1755,10 @@ if (window.TB_RO) { document.querySelectorAll(".composer, .del").forEach(functio
 })();
 </script>
 <style id="settingsStyles">
+/* v2.1.4: hold the page invisible until /style.css has loaded and applied (see tb-loaded flag in
+   <head>) - no more plain unstyled text + bare pictures for a moment on every full-page reload */
+body { visibility: hidden; }
+html.tb-loaded body { visibility: visible; }
 #settingsIcon { position: fixed; top: 12px; right: 14px; z-index: 60; width: 42px; height: 42px;
   border-radius: 50%; border: none; cursor: pointer; font-size: 22px; line-height: 1;
   background: var(--panel, #fff); color: var(--ink, #333); box-shadow: 0 2px 8px rgba(0,0,0,.25); }
