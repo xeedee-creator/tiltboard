@@ -155,7 +155,12 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "2.1.4"  # v2.1.4: hide unstyled board flash during page reload (FOUC guard);
+VERSION = "2.1.6"  # v2.1.6: no pass_read_only + full password set -> visitors without a cookie
+#                  browse in read-only mode instead of the login dialog; the settings Login
+#                  button upgrades them to a full session with pass_full_access;
+# v2.1.5: tabs with an invalidated cookie stop polling after the first 401, and their /posts poll's
+#         401s are only shown with "debug": 1 (no more WARNING spam);
+# v2.1.4: hide unstyled board flash during page reload (FOUC guard);
 # v2.1.3: constant black font color for all emoji-component cells in every style;
 # v2.1.2: header.html stays visible on the login screen (locked page keeps .wrap open);
 # v2.1.x: optional password login (pass_full_access/pass_read_only) - signed tb_auth cookie,
@@ -309,6 +314,10 @@ SYNC_TOKEN = CONFIG["sync_token"]       # both servers must hold the same string
 AUTH_FULL = CONFIG["pass_full_access"]  # v2.1.0: password granting full access (post/delete/rate/download/read)
 AUTH_RO = CONFIG["pass_read_only"]      # different non-empty value -> read-only role; identical to AUTH_FULL -> grants full
 AUTH_ENABLED = bool(AUTH_FULL)          # empty full-password means no auth at all, whatever pass_read_only holds
+# v2.1.6: full password set but no read-only one -> cookie-less visitors browse in read-only mode
+# (board, downloads and ratings stay open; composer/delete hidden); the settings Login button is
+# the way to enter pass_full_access and upgrade to a full session
+AUTH_GUEST_RO = bool(AUTH_FULL) and not AUTH_RO
 # Secret is derived from the two password strings themselves - no third key to manage, no DB.
 # Changing either configured password invalidates every cookie issued before (by design).
 _AUTH_SECRET = hashlib.sha256((AUTH_FULL + "|" + AUTH_RO).encode("utf-8")).digest() if AUTH_ENABLED else b""
@@ -330,7 +339,10 @@ def _auth_role(cookie_header: str) -> str | None:
             role, dot, sig = value.partition(".")
             if dot and role in ("full", "ro") and hmac.compare_digest(sig, _auth_sign(role)):
                 return role
-    return None
+    # v2.1.6: no valid tb_auth cookie - a board configured without its own read-only key lets the
+    # visitor straight in as 'ro' instead of the login dialog (guest mode; upgrade via Login button).
+    # A distinct pass_read_only keeps today's behaviour: anonymous visitors still get the overlay.
+    return "ro" if AUTH_GUEST_RO else None
 
 
 def _login_ok(password: str) -> str | None:
@@ -690,6 +702,12 @@ PAGE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tiltboard</title>
+<style>/* v2.1.6: hide the page from the very first byte - the rules in <style id="settingsStyles">
+   arrive only after all card markup (line ~805), so a full reload could still paint one unstyled
+   frame before they apply; this inline head rule closes that window, revealed by html.tb-loaded.
+   The timeout below guarantees reveal even if the theme sheet never applies. */
+body { visibility: hidden; }
+html.tb-loaded body { visibility: visible !important; }</style>
 <link id="theme" rel="stylesheet" href="/style.css">
 <script>  /* v2.0.1 hotfix: apply the cookie theme synchronously, before first paint - kills the
    flash of the config-default style that used to show for a moment after every refresh */
@@ -705,18 +723,23 @@ PAGE = r"""<!DOCTYPE html>
   } catch (e) {}
 })();
 </script>
-<script>/* v2.1.4: raise html.tb-loaded the moment /style.css is applied - the shared CSS below keeps
+<script>/* v2.1.6: raise html.tb-loaded only once /style.css has really applied - the shared CSS below keeps
    body invisible until then, so a reload (post/delete/style/rows-cols) never flashes plain text +
-   raw pictures for one frame. 'error' reveals too, so a missing theme file cannot hide it forever.
-   The styleSheets poll covers cached stylesheets that skip the load event. */
+   raw pictures for one frame. A sheet entry appears in document.styleSheets as soon as <link> is
+   parsed, even while still downloading - on every cold load (cleared cache / new visitor; /style.css
+   is served no-store) the old href-only check revealed too early and flashed. The poll now verifies
+   cssRules are actually readable before revealing; 'error' reveals too, and a 1500 ms safety timeout
+   guarantees the page can never stay hidden (missing/blocked theme). */
 (function () {
-  function ready() { document.documentElement.classList.add("tb-loaded"); }
+  var done = false;
+  function ready() { if (!done) { done = true; document.documentElement.classList.add("tb-loaded"); } }
   var l = document.getElementById("theme");
   if (l) { l.addEventListener("load", ready); l.addEventListener("error", ready); }
   (function check() {
     for (var s of document.styleSheets) if ((s.href || "").indexOf("/style.css") > -1) return ready();
     setTimeout(check, 5);
   })();
+  setTimeout(ready, 2000);  // bounded reveal: a missing/blocked theme must not hide the page forever
 })();
 </script>
 <script>/* v2.1.x: pre-login visitors still get this document (themed, gear icon live) but the server
@@ -1494,6 +1517,9 @@ if (window.TB_RO) { document.querySelectorAll(".composer, .del").forEach(functio
     if (window.tiltSearchActive && window.tiltSearchActive()) return;  // v1.14.0: filter owns the board
     try {
       const res = await fetch(postsUrl(), { cache: "no-store" });
+      // v2.1.5: our cookie is gone (password changed, cookies cleared elsewhere) - any further poll would
+      // 401 every tick; park in auth mode so the guard above stops poll() until this tab reloads or logs in
+      if (res.status === 401) { window.TB_AUTH_MODE = true; return; }
       if (!res.ok) return;
       const data = await res.json();  // v1.7.0: {total, posts} - total drives the pager
       const posts = data.posts || [];
@@ -2389,6 +2415,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        self._quiet_401 = False  # v2.1.5: per-request flag, set by the auth gate and read/cleared by log_message
         # v2.0.0 sync handshake - the single endpoint a peer server calls for a full diff.
         if path == "/sync/state":
             self._handle_sync_state()
@@ -2397,6 +2424,10 @@ class Handler(BaseHTTPRequestHandler):
             # v2.1.0: data routes need a valid role; the shell page stays open so its baked-in
             # flag can render the login dialog before anything is served to unauthenticated users
             if _auth_role(self.headers.get("Cookie") or "") is None:
+                # v2.1.5: a stale tab with an invalidated cookie polls /posts every 3 seconds (once per
+                # minute when the browser throttles it in the background) - that expected 401 gets demoted
+                # to debug-only by log_message via this flag; other routes' 401s stay at WARNING level
+                self._quiet_401 = path == "/posts"
                 self._send(401, json.dumps({"ok": False, "error": "login required"}).encode("utf-8"),
                            {"Content-Type": "application/json", "Cache-Control": "no-store"})
                 return
@@ -2897,10 +2928,14 @@ class Handler(BaseHTTPRequestHandler):
                 break
             except ValueError:
                 continue
-        if code is not None and code >= 400:
+        # v2.1.5: the /posts poll's 401 from a locked tab (do_GET sets _quiet_401 for that one route)
+        # is expected noise - only shown with "debug": 1; every other failure remains visible at WARNING
+        quiet = getattr(self, "_quiet_401", False) and code == 401
+        self._quiet_401 = False  # consume it so a stale value can't leak into the next request
+        if code is not None and code >= 400 and not quiet:
             log.warning("request: %s", line)   # failures always visible
         else:
-            log.debug("request: %s", line)     # routine traffic stays quiet
+            log.debug("request: %s", line)     # routine traffic (and quieted polls) stay quiet
 
 
 def find_post_line(text: str, attach_name: str | None) -> int:

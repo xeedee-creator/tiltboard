@@ -2,6 +2,20 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.6] - 2026-11-13
+
+### Added
+- **Guest read-only mode** — with `pass_full_access` set and `pass_read_only` empty, a visitor without a cookie no longer hits the login dialog but goes straight in as a read-only guest: board, downloads and ratings stay open; only the composer, search bar and per-tilt delete ✕ disappear (exactly like an explicit read-only session). The settings-bar **Login** button is the upgrade path — entering `pass_full_access` there switches the same tab to full access without clearing anything. A distinct non-empty `pass_read_only` keeps today's behaviour untouched: anonymous visitors still get the password overlay, and that key logs them in as before.
+
+### Fixed
+- **FOUC regression — no more single unstyled frame on reload** — a build after v2.1.4 flashed plain text + bare pictures for one frame again, reproducible precisely with cleared browser cache / fresh profiles (a warm-cache sheet applied within the same RTT and masked the hole). Two latent weaknesses combined: the rule that actually hides `body` sat inside `<style id="settingsStyles">`, which the parser only reaches after all card markup — so on any full-document load unstyled cards could paint before it even existed; and the old probe matched a `document.styleSheets` entry by href alone, which appears the instant the `<link>` is parsed while `/style.css` (served `no-store`) is still downloading. The guard now keeps `body { visibility: hidden }` in an inline rule in `<head>` from the very first byte and raises `html.tb-loaded` only once a stylesheet's rules are truly readable — plus load/error listeners and a bounded safety timeout, so a missing or blocked theme can never leave the page invisible. No theme file was touched; all nine styles still set CSS variables only.
+
+## [2.1.5] - 2026-11-13
+
+### Fixed
+- **Unauthenticated `/posts` polls no longer flood `tiltboard.log` with WARNING** — a tab loaded while its cookie was still valid keeps running its old poller after the password/config changed, so every background fetch gets rejected; browsers clamp hidden-tab timers to ~once/minute, which surfaces as an endless rhythm of `"GET /posts?page=1&rows=10&cols=3 HTTP/1.1" 401` WARNING lines that drown real problems. The auth gate now tags exactly that rejection — only the `/posts` poll (a `/search`, file download or sync-route 401 still warns) — and `log_message` demotes just this case to DEBUG, so it appears solely with `"debug": 1`; every other ≥400 response logs at WARNING as before. The flag is per-request and consumed on read, which also keeps keep-alive connections safe.
+- **A stale tab stops polling the moment its cookie is invalidated** — a 401 from `poll()` now flips the client into auth mode (the same `window.TB_AUTH_MODE` guard that already silences fresh locked-page visitors), so an outdated tab sends at most one more rejected request and then goes quiet until it reloads or logs in again. No UI change, no overlay — only the wasted requests end.
+
 ## [2.1.4] - 2026-11-13
 
 ### Fixed
