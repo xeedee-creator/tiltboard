@@ -155,7 +155,8 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "2.1.2"  # v2.1.2: header.html stays visible on the login screen (locked page keeps .wrap open);
+VERSION = "2.1.3"  # v2.1.3: constant black font color for all emoji-component cells in every style;
+# v2.1.2: header.html stays visible on the login screen (locked page keeps .wrap open);
 # v2.1.x: optional password login (pass_full_access/pass_read_only) - signed tb_auth cookie,
 # themed login dialog in every style, settings-bar Login button for role switching
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
@@ -1881,18 +1882,19 @@ button#emojiBtn, button#attachBtn, button#post { height: 42px; }
   transform: translateY(2px) scaleX(.5) scaleY(.57); transform-origin: left center; }
 /* tilt hover zoom (v1.8.0) - same :hover event as the delete cross; keeps each card's rotation */
 .tilt:hover, .tilt:focus-within { transform: rotate(var(--tilt)) scale(1.04); z-index: 3; }
-/* emoji picker (v1.5.5) - structure here, neutral colors with theme-var fallbacks */
+/* emoji picker (v1.5.5) - constant black glyph color in every style (v2.1.3): monochrome
+   text-presentation symbols must never inherit a theme's light/dark ink and vanish on the panel */
 .composer { position: relative; }
 button#emojiBtn { flex: none; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 16px;
   border: 1px solid var(--line, #ccc); background: var(--field, #fff); color: inherit; }
 button#emojiBtn:hover { transform: scale(1.12) rotate(-8deg); transition: transform .15s; }
 #emojiPicker { position: absolute; left: 0; top: calc(100% + 8px); z-index: 40; width: min(92vw, 360px);
   max-height: 280px; overflow-y: auto; padding: 10px; border-radius: 12px;
-  background: var(--panel, #fff); color: var(--ink, #333); border: 1px solid var(--line, #ccc);
+  background: var(--panel, #fff); color: #000; border: 1px solid var(--line, #ccc);
   box-shadow: 0 8px 24px rgba(0,0,0,.3); display: grid; gap: 2px;
   grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); }
 #emojiPicker button { font-size: 20px; line-height: 1; padding: 5px 2px; border: none; background: transparent;
-  cursor: pointer; border-radius: 8px; }
+  color: #000; cursor: pointer; border-radius: 8px; }
 #emojiPicker button:hover { transform: scale(1.3); background: rgba(127,127,127,.15); transition: transform .1s; }
 @keyframes emojiPopIn { from { opacity: 0; transform: translateY(-6px) scale(.94); } to { opacity: 1; transform: none; } }
 #emojiPicker:not(.hidden) { animation: emojiPopIn .18s ease-out; }

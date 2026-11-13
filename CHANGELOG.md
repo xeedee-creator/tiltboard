@@ -2,6 +2,11 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3] - 2026-11-13
+
+### Fixed
+- **Constant black font color for the emoji component in every style** — a few library symbols render as monochrome text-presentation glyphs (➤ ➔ ○ ● ☢ ✉ 🖥 ⚙ …) and previously inherited their `color` from whichever theme was active, so they could end up invisible (e.g. white symbols on a light panel). The picker now forces fixed black (`#000`) in the shared CSS block — on the panel itself **and** explicitly on every cell (`#emojiPicker button`), which also beats any theme-level generic `button` color rule. No stylesheet was touched; full-color emoji ignore CSS text color and are unaffected.
+
 ## [2.1.2] - 2026-11-13
 
 ### Changed

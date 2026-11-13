@@ -7,6 +7,6 @@
   "style": "neon",
   "slow_upload": 0,
   "pass_full_access": "pivo", 
-  "pass_read_only": "q",
+  "pass_read_only": "a",
   "debug": 0
 }
