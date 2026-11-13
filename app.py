@@ -155,7 +155,7 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "2.1.6"  # v2.1.6: no pass_read_only + full password set -> visitors without a cookie
+VERSION = "2.2.0"  # v2.1.6: no pass_read_only + full password set -> visitors without a cookie
 #                  browse in read-only mode instead of the login dialog; the settings Login
 #                  button upgrades them to a full session with pass_full_access;
 # v2.1.5: tabs with an invalidated cookie stop polling after the first 401, and their /posts poll's
@@ -418,7 +418,8 @@ RATING_RE = re.compile(r"::(\d+):(\d+):(\d+):(\d+)$")
 # (ratings keep it), so remote diffs can match lines by identity instead of position.
 # Pre-sync history is backfilled with IDs on the first sync-enabled start.
 LINE_ID_RE = re.compile(r" [0-9a-f]{8}_[1-9][0-9]*$")
-_id_seq = 0  # caller must hold _chat_lock (persist_text / backfill both do)
+_id_seq = 0      # caller must hold _chat_lock (persist_text / backfill both do)
+_LAST_LINE_ID = ""  # v2.2.0: persist_text() fills it under _chat_lock; add_post() tags the in-memory post
 
 def _strip_line_id(line: str) -> tuple[str, int]:
     """v2.0.0 sync: (line without ID token, seq-or-0). Call before ATTACH_RE/RATING_RE."""
@@ -483,9 +484,12 @@ def restore_posts() -> None:
         return
     log.info("restored %d tilt%s from chat.txt", len(lines), "" if len(lines) == 1 else "s")
     for line in lines:
+        im = LINE_ID_RE.search(line)  # v2.2.0: read the sync ID from the raw line - split_line strips it internally
         text, path = split_line(line)
         attach = describe_attach(path) if path else None
         post = _new_post(text, attach)
+        if im:
+            post["id"] = im.group(0).strip()  # v2.2.0: stable /swap identity (absent pre-sync -> text fallback)
         m = RATING_RE.search(text)  # v1.23.0: peel the rating tail off the display text
         if m:
             post["text"] = text[:m.start()].rstrip()
@@ -505,8 +509,11 @@ def persist_text(text: str, stored_name: str | None = None) -> None:
         local = os.path.normpath(os.path.join(DATA_FOLDER, stored_name)) \
             .replace("\\", "/")  # E:\data\x.jpg -> E:/data/x.jpg ; UNC keeps //server
         text += f" file://{local.replace(' ', '%20')}"
+    global _LAST_LINE_ID  # v2.2.0: add_post() reads it right after this call (same thread)
     with _chat_lock:  # v2.0.0: appends share one lock with delete/rate rewrites
-        text += " " + _new_line_id(text)  # v2.0.0: new posts carry their stable ID at write time
+        token = _new_line_id(text)  # v2.0.0: new posts carry their stable ID at write time
+        text += " " + token
+        _LAST_LINE_ID = token  # v2.2.0: swap identity for the post being appended right now
         with open(CHAT_PATH, "a", encoding="utf-8") as f:
             f.write(text + "\n")
 
@@ -568,7 +575,10 @@ def backfill_line_ids() -> None:
 def add_post(text: str, stored_name: str | None = None) -> None:
     persist_text(text, stored_name)
     attach_path = os.path.join(DATA_FOLDER, stored_name) if stored_name else None
-    POSTS.append(_new_post(text, describe_attach(attach_path)))
+    post = _new_post(text, describe_attach(attach_path))
+    if _LAST_LINE_ID:  # v2.2.0: same stable ID the line just got on disk -> /swap identity travels in memory too
+        post["id"] = _LAST_LINE_ID
+    POSTS.append(post)
     snippet = text.replace("\n", " ")[:60]  # one-line digest; escapes stay readable
     log.info("tilt posted: %s%s", snippet,
              f" (attachment {stored_name})" if stored_name else "")
@@ -1416,6 +1426,7 @@ if (window.TB_RO) { document.querySelectorAll(".composer, .del").forEach(functio
       del.textContent = "\u2715";  // U+2715, same glyph as &#10005; in the server HTML
       div.dataset.text = post.text;
       div.dataset.attach = post.attach ? post.attach.name : "";
+      div.dataset.id = post.id || "";  // v2.2.0: identity token for drag & drop swap
       // v1.23.0: rating row - same structure the server HTML emits
       const rate = document.createElement("span");
       rate.className = "rate";
@@ -1711,6 +1722,134 @@ if (window.TB_RO) { document.querySelectorAll(".composer, .del").forEach(functio
     if (del) { openDialog(del.closest(".tilt")); return; }
     const rb = e.target.closest && e.target.closest(".tilt .rate-btn");
     if (rb && !rb.classList.contains("rated")) rateTilt(rb);
+  });
+})();
+</script>
+<script>
+/* v2.2.0: drag & drop card swapping (full-access visitors only). Mousedown on a tilt's
+   background, more than 5px of movement starts the drag; when the card sits inside another
+   tilt's inner rectangle (the middle 2/3 zone per spec), both cards pulse as a swap preview;
+   releasing there POSTs /swap with both cards' identity tokens and reloads the page.
+   Mousedown on the tilt's text is NOT a drag: native text selection keeps working there,
+   while background drags preventDefault() so no text gets selected along the way. */
+(function () {
+  if (window.TB_RO) return;  // read-only visitors never get reordering
+  const board = document.getElementById("board");
+  if (!board) return;
+  // preview animation injected at runtime so no theme .css file is touched:
+  // while a drag is held, EVERY hovered card shrinks AND rocks side-to-side (translate,
+  // so it composes with each card's own --tilt rotation) - one uniform behavior for all
+  const st = document.createElement("style");
+  st.textContent = ".tilt.tb-swap-prev { animation: tbSwapPreview .35s ease-in-out infinite alternate; }\n"
+    + "@keyframes tbSwapPreview { from { translate: -8px 0; opacity:.92; } to { translate: 8px 0; opacity:1; } }\n"
+    + ".tb-drag-active .tilt:hover { transform: rotate(var(--tilt)) scale(.9) !important; z-index:3; transition:transform .15s ease; animation: tbSwapPreview .35s ease-in-out infinite alternate !important; }\n"
+    + ".tilt.tb-drag-ghost { position:fixed !important; margin:0 !important; pointer-events:none; z-index:9999; opacity:.6; box-shadow:0 8px 24px rgba(0,0,0,.35) !important; }\n"
+    + "@keyframes tbGhostPop { from { scale:.85; } to { scale:1; } }";
+  document.head.appendChild(st);
+  let heldCard = null, startX = 0, startY = 0, dragging = false;
+  // the transparent clone that sticks to the cursor while a drag is active
+  let ghost = null;
+
+  function cardFromEvent(e) {
+    const el = e.target;
+    // ignore interactive content: buttons (delete / rate), links, pictures,
+    // composer and any open overlay - only a tilt's own background starts a drag
+    if (!el || !el.closest) return null;
+    if (el.closest("button, a, img, .composer, #confirmOverlay, #loginOverlay")) return null;
+    if (el.closest(".tilt .text")) return null;  // text area: native selection only, never a drag
+    if (!document.getElementById("settingsBox").classList.contains("hidden")) return null;
+    return el.closest(".tilt") || null;
+  }
+
+  function innerZoneHit(x, y) {
+    for (const other of board.querySelectorAll(".tilt")) {
+      if (other === heldCard) continue;
+      const r = other.getBoundingClientRect();
+      const dx = x - r.left, dy = y - r.top, w = r.width, h = r.height;
+      // user spec: the middle 2/3 zone of a card
+      if (dx >= w / 6 && dx < 5 * w / 6 && dy >= h / 6 && dy < 5 * h / 6) return other;
+    }
+    return null;
+  }
+
+  function setPreview(hit) {
+    if (target === hit) return;
+    board.querySelectorAll(".tb-swap-prev").forEach(el => el.classList.remove("tb-swap-prev"));
+    target = hit;
+    if (hit && dragging) { heldCard.classList.add("tb-swap-prev"); target.classList.add("tb-swap-prev"); }
+  }
+
+  function disarm() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  }
+
+  function killGhost() { if (ghost) { ghost.remove(); ghost = null; } }
+
+  function moveGhost(x, y) {
+    // centered on the cursor: card stays under the mouse no matter where it was pressed
+    const r = ghost.getBoundingClientRect();
+    ghost.style.left = Math.round(x - r.width / 2) + "px";
+    ghost.style.top = Math.round(y - r.height / 2) + "px";
+  }
+
+  function makeGhost(card, x, y) {
+    if (ghost) return;  // one clone per drag
+    const r = card.getBoundingClientRect();
+    ghost = card.cloneNode(true);        // deep copy: text, rating row, buttons all travel along
+    ghost.classList.add("tb-drag-ghost");
+    ghost.style.width = r.width + "px";  // grid columns size .tilt, so fix the width explicitly
+    document.body.appendChild(ghost);
+    moveGhost(x, y);
+  }
+
+  function releaseVisuals() {
+    killGhost();                        // a released drag drops its ghost
+    heldCard.style.opacity = "";
+    document.body.classList.remove("tb-drag-active");  // hover zoom + wiggle stop after release
+  }
+
+  function onMove(e) {
+    if (!heldCard) return;
+    if (!dragging) {  // the >5px threshold: a click or micro-slide never drags
+      const dist = Math.abs(e.clientX - startX) + Math.abs(e.clientY - startY);
+      if (dist < 5) return;
+      dragging = true;
+      document.body.classList.add("tb-drag-active");  // every hovered card now shrinks instead of zooming
+      heldCard.style.opacity = "0.5";  // original stays behind as a dimmed empty slot
+      makeGhost(heldCard, e.clientX, e.clientY);
+    }
+    e.preventDefault();  // an active drag never starts native text selection along its path
+    if (dragging && ghost) moveGhost(e.clientX, e.clientY);  // the clone sticks to the cursor
+  }
+
+  function onUp(e) {
+    if (!heldCard) return;
+    const card = heldCard, wasDragging = dragging, hit = innerZoneHit(e.clientX, e.clientY);
+    disarm(); releaseVisuals();
+    heldCard = null; dragging = false;
+    if (!wasDragging || !hit) return;  // plain click or released outside any zone
+    fetch("/swap", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idA: card.dataset.id || "",
+                             textA: card.dataset.text || "",
+                             attachA: card.dataset.attach || "",
+                             idB: hit.dataset.id || "", textB: hit.dataset.text || "",
+                             attachB: hit.dataset.attach || "" })
+    }).then(r => r.json()).then(j => {
+      if (j.ok) location.reload();
+      else alert("Swap failed - your board was not changed.");
+    }).catch(() => alert("Swap failed - could not reach the server."));
+  }
+
+  board.addEventListener("mousedown", e => {
+    if (e.button !== 0 || dragging) return;
+    const card = cardFromEvent(e);
+    if (!card) return;
+    e.preventDefault();  // background press: no accidental text selection may start from it
+    heldCard = card; startX = e.clientX; startY = e.clientY; dragging = false;
+    document.addEventListener("mousemove", onMove);   // armed until the threshold
+    document.addEventListener("mouseup", onUp, { once: true });
   });
 })();
 </script>
@@ -2336,7 +2475,8 @@ def render_posts(page: int = 1) -> str:
         attach_name = html.escape(attach["name"], quote=True) if attach else ""
         cards.append(f'<div class="tilt{emoji_cls}" data-c="{post["color"]}" style="--tilt: {tilt} "'
                      f'data-text="{html.escape(post["text"], quote=True)}"'
-                     f'data-attach="{attach_name}">{rate_row}{delete_btn}'
+                     f'data-attach="{attach_name}"'
+                     f'data-id="{html.escape(str(post.get("id", "")), quote=True)}">{rate_row}{delete_btn}'
                      f'<span class="text">{text}</span>{extra}</div>')
     return "\n".join(cards)
 
@@ -2588,6 +2728,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/delete":    # v1.5.4: remove one tilt + its source file
             self._handle_delete()
+            return
+        if parsed.path == "/swap":     # v2.2.0: drag & drop card reordering (RO gate above keeps it full-access only)
+            self._handle_swap()
             return
         if parsed.path == "/rate":      # v1.23.0: tilt rating, one vote per visitor
             self._handle_rate()
@@ -2848,6 +2991,101 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, json.dumps({"ok": True, "removed_file": removed_file}).encode(),
                    {"Content-Type": "application/json"})
 
+    def _handle_swap(self):  # v2.2.0: drag & drop card reordering - two tilts exchange places
+        """POST /swap - exchange the positions of two tilts in chat.txt.
+
+        The client sends both cards' identities (idA/textA/attachA, idB/...
+        textA is the display text exactly as rendered - rating tails and ID
+        tokens are stripped before it reaches us). Identity priority: the stable
+        v2.0 line-ID token when present, else content match via find_post_line()
+        (same semantics /delete uses). The two whole lines are swapped byte-for-byte,
+        so ratings, attachments, names and IDs all travel with their cards.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            req = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+        except (ValueError, UnicodeDecodeError):
+            self._send(400, json.dumps({"ok": False, "error": "bad request"}).encode())
+            return
+        idA, textA = str(req.get("idA", "")), str(req.get("textA", ""))
+        att_rawA = req.get("attachA")
+        attachA = att_rawA if isinstance(att_rawA, str) and att_rawA else None
+        idB, textB = str(req.get("idB", "")), str(req.get("textB", ""))
+        att_rawB = req.get("attachB")
+        attachB = att_rawB if isinstance(att_rawB, str) and att_rawB else None
+        if not (idA or textA) or not (idB or textB):
+            self._send(400, json.dumps({"ok": False, "error": "bad request"}).encode())
+            return
+        log.debug("action=swap A(id=%s %r) <-> B(id=%s %r)",  # v1.24.0: extended logging
+                  idA or "-", textA[:60], idB or "-", textB[:60])
+        try:  # same benign race as /delete and /rate accept for their index lookup
+            lines = [ln.rstrip("\n") for ln in open(CHAT_PATH, encoding="utf-8")]
+        except OSError as e:
+            self._send(500, json.dumps({"ok": False, "error": str(e)}).encode())
+            return
+
+        def id_index(token):  # stable v2.0 line-ID token wins when the card carries one
+            if not token:
+                return 0
+            for n, ln in enumerate(lines, 1):
+                m = LINE_ID_RE.search(ln)
+                if m and m.group(0).strip() == token:
+                    return n
+            return 0
+        idxA, idxB = id_index(idA), id_index(idB)  # pre-sync rows fall back to /delete semantics
+        if not idxA:  # same benign race as /delete and /rate accept for their index lookup
+            idxA = find_post_line(textA, attachA)
+        if not idxB:
+            idxB = find_post_line(textB, attachB)
+        if not (idxA and idxB):
+            self._send(404, json.dumps({"ok": False, "error": "tilt not found"}).encode())
+            return
+        try:
+            if idxA == idxB:  # released inside its own zone - nothing to move
+                log.debug("swap no-op (same line %d) - ignored", idxA)  # v1.24.0: extended logging
+                self._send(200, json.dumps({"ok": True}).encode(),
+                           {"Content-Type": "application/json"})
+                return
+            with _chat_lock:  # v2.0.0: the whole read-swap-write of chat.txt stays atomic
+                lines = [ln.rstrip("\n") for ln in open(CHAT_PATH, encoding="utf-8")]
+                if not (1 <= idxA <= len(lines)) or not (1 <= idxB <= len(lines)):  # v2.2.0: newest tilt is line len() - must stay valid
+                    self._send(404,
+                               json.dumps({"ok": False, "error": "tilt not found"}).encode())
+                    return
+                lines[idxA - 1], lines[idxB - 1] = (lines[idxB - 1], lines[idxA - 1])  # byte-for-byte swap
+                with open(CHAT_PATH, "w", encoding="utf-8") as f:
+                    for ln in lines:  # every other line is preserved byte-for-byte
+                        if ln.strip():
+                            f.write(ln + "\n")
+        except OSError as e:
+            self._send(500, json.dumps({"ok": False, "error": str(e)}).encode())
+            return
+        def matches(p, text, attach):  # display text + stored attachment name identify a card
+            if p.get("text") != text:
+                return False
+            pname = (p.get("attach") or {}).get("name", "") if isinstance(p.get("attach"), dict) else None
+            return attach is None or pname == attach
+        try:  # mirror the new order in memory - restore_posts() only runs at startup
+            ia = ib = None
+            for n, p in enumerate(POSTS):
+                if ia is None and ((idA and p.get("id") == idA)
+                        or (not idA and matches(p, textA, attachA))):
+                    ia = n
+                elif ib is None and n != ia and ((idB and p.get("id") == idB)
+                        or (not idB and matches(p, textB, attachB))):
+                    ib = n
+            if ia is not None and ib is not None:
+                POSTS[ia], POSTS[ib] = POSTS[ib], POSTS[ia]
+        except Exception:  # memory is only a cache; chat.txt is the source of truth
+            pass
+        log.info("tilts swapped (chat.txt lines %d <-> %d): %r <-> %r", idxA, idxB,
+                 textA[:40], textB[:40])
+        _sync_dirty()  # v2.0.0: queue the swap for forwarding to the passive board
+        _pending_actions.put(("swap", {"idA": idA, "textA": textA, "attachA": attachA,
+                                       "idB": idB, "textB": textB, "attachB": attachB}))
+        self._send(200, json.dumps({"ok": True}).encode(),
+                   {"Content-Type": "application/json"})
+
     def _handle_rate(self):
         """POST /rate - add one vote (up/down/heart/smile) to a tilt.
 
@@ -3059,6 +3297,9 @@ def _sync_forward(action: str, payload: dict) -> None:
             body["attach_stored"] = attached or payload.get("attach")
     elif action == "delete":
         body = {"text": payload["text"], "attach": payload.get("attach")}
+    elif action == "swap":  # v2.2.0: forward the swap to a passive board's /swap
+        body = {k: payload.get(k) for k in ("idA", "textA", "attachA",
+                                            "idB", "textB", "attachB")}
     else:  # rate
         body = {"icon": payload.get("icon"), "text": payload["text"],
                 "attach": payload.get("attach")}
