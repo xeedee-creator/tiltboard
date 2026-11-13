@@ -155,7 +155,8 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "2.1.1"  # v2.1.x: optional password login (pass_full_access/pass_read_only) - signed tb_auth cookie,
+VERSION = "2.1.2"  # v2.1.2: header.html stays visible on the login screen (locked page keeps .wrap open);
+# v2.1.x: optional password login (pass_full_access/pass_read_only) - signed tb_auth cookie,
 # themed login dialog in every style, settings-bar Login button for role switching
 DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/columns
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
@@ -772,8 +773,10 @@ __ARROWS_BOTTOM__
    (themed) login dialog and the settings gear; composer/search/pager stay hidden until the
    signed cookie from /login arrives on location.replace('/'). */
 window.TB_AUTH_ENABLED = __AUTH_ENABLED__;  // auth configured at all - Login button in settings even when logged in
-  var relock = function () {  // v2.1.x: shared by the locked-page reveal AND the Login button (re-lock while logged in)
-    var w = document.querySelector(".wrap"); if (w) w.style.display = "none";
+  var relock = function (keepHeader) {  // v2.1.x: shared by the locked-page reveal AND the Login button (re-lock while logged in);
+    // v2.1.2: keepHeader keeps .wrap visible so header.html still renders on the login screen
+    // (a locked page bakes empty posts and pagers, nothing sensitive can leak from it)
+    var w = document.querySelector(".wrap"); if (w && !keepHeader) w.style.display = "none";
     ["searchIcon", "searchInput"].forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = "none"; });
     var sbx = document.getElementById("settingsBox");
     if (sbx) {
@@ -788,9 +791,9 @@ window.TB_AUTH_ENABLED = __AUTH_ENABLED__;  // auth configured at all - Login bu
   var rb = document.getElementById("reloginBtn");   // v2.1.x: Login button in settings - also for logged-in users
   if (rb) { rb.hidden = !window.TB_AUTH_ENABLED; if (window.TB_AUTH_ENABLED) rb.onclick = relock; }
   if (window.TB_AUTH_MODE) {
-    document.querySelectorAll(".composer, .pager, #searchIcon, #searchInput, .arrow")
-      .forEach(function (el) { el.style.display = "none"; });
-    relock();
+    document.querySelectorAll(".composer, .pager, #searchIcon, #searchInput, .arrow, #board")
+      .forEach(function (el) { el.style.display = "none"; });  // v2.1.2: #board stays hidden too
+    relock(true);  // v2.1.2: header.html remains visible on the login screen
   }
   // v2.1.x: a logged-in user who re-locked via the Login button can walk away again -
   // Escape or a click on the backdrop restores exactly what relock() hid (the board,
@@ -799,7 +802,7 @@ window.TB_AUTH_ENABLED = __AUTH_ENABLED__;  // auth configured at all - Login bu
   function dismissLogin() {
     if (!loEl || loEl.classList.contains("hidden")) return;
     loEl.classList.add("hidden"); loEl.setAttribute("aria-hidden", "true");
-    var w = document.querySelector(".wrap"); if (w) w.style.display = window.TB_AUTH_MODE ? "none" : "";
+    var w = document.querySelector(".wrap"); if (w) w.style.display = "";  // v2.1.2: wrap was never hidden on a locked page
     ["searchIcon", "searchInput"].forEach(function (id) {
       var el = document.getElementById(id); if (el) el.style.display = window.TB_AUTH_MODE ? "none" : ""; });
     var sbx = document.getElementById("settingsBox");

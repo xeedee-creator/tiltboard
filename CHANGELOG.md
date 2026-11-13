@@ -2,6 +2,11 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] - 2026-11-13
+
+### Changed
+- **`header.html` stays visible on the login screen** — with `pass_full_access` set, an unauthenticated visitor's locked page previously hid the entire `.wrap`, suppressing the optional top frame together with the composer and pagers. The pre-login reveal now keeps `.wrap` open (a locked page bakes empty posts/pagers and hides the board too, so nothing sensitive can leak) while still hiding composer, search and pager — header.html renders exactly as it does on a normal board.
+
 ## [2.1.1] - 2026-11-12
 
 ### Fixed
