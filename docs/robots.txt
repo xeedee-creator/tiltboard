@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://xeedee-creator.github.io/tiltboard/sitemap.xml

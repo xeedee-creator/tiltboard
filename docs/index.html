@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tiltboard — File share, chat &amp; bulletin board on one page</title>
+<meta name="description" content="Tiltboard is a self-hosted file sharing, chat and bulletin board in a single page: drag & drop uploads of multi-GB files, card ratings, nine visual themes, optional full/read-only login passwords and two-server repository synchronisation. No database — all history lives in one text file.">
+<meta name="keywords" content="file sharing, chat, bulletin board, self-hosted, no database, python http server, drag and drop upload, big files, windows exe, image share, team collaboration, sync mirror">
+<link rel="canonical" href="https://xeedee-creator.github.io/tiltboard/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Tiltboard — File share, chat &amp; bulletin board on one page">
+<meta property="og:description" content="Self-hosted file sharing + chat + bulletin board with big-file uploads, ratings and server sync. No database — just one text file. Download the .exe or run app.py.">
+<meta property="og:url" content="https://xeedee-creator.github.io/tiltboard/">
+<meta property="og:image" content="https://xeedee-creator.github.io/tiltboard/screenshots/app_sample01.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="app_ico_48x48.png">
+<style>
+  :root { --bg:#0e1526; --panel:#1a2338; --text:#e8ecf4; --dim:#9aa7c0; --accent:#4da3ff; --border:#2a3554; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Segoe UI", system-ui, Arial, sans-serif; background:var(--bg); color:var(--text); line-height:1.55; }
+  .wrap { max-width:960px; margin:0 auto; padding:24px 20px 48px; }
+  header { text-align:center; padding:32px 0 8px; }
+  h1 { font-size:2.1rem; letter-spacing:.5px; }
+  h1 .board { color:var(--accent); }
+  .tagline { color:var(--dim); margin-top:8px; font-size:1.05rem; }
+  h2 { margin:36px 0 14px; font-size:1.25rem; border-bottom:1px solid var(--border); padding-bottom:6px; }
+  p, li { color:var(--text); }
+  ul.grid { list-style:none; display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+  ul.grid li { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px; }
+  ul.grid b { color:var(--accent); display:block; margin-bottom:4px; }
+  .shots { display:flex; flex-wrap:wrap; gap:12px; justify-content:center; }
+  .shots img { max-width:300px; width:100%; border-radius:10px; border:1px solid var(--border); box-shadow:0 8px 24px rgba(0,0,0,.45); }
+  .cta { display:flex; gap:12px; justify-content:center; margin-top:20px; flex-wrap:wrap; }
+  a.btn { text-decoration:none; font-weight:600; padding:10px 22px; border-radius:8px; background:var(--accent); color:#0b1220; }
+  a.btn.alt { background:transparent; color:var(--text); border:1px solid var(--border); }
+  code, pre { font-family:Consolas, monospace; }
+  code { background:var(--panel); border:1px solid var(--border); padding:1px 6px; border-radius:5px; font-size:.92em; }
+  pre { background:#0a101d; border:1px solid var(--border); border-radius:8px; padding:14px 16px; overflow-x:auto; margin:10px 0; color:#cfe3ff; }
+  footer { text-align:center; color:var(--dim); margin-top:44px; font-size:.9rem; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Tilt<span class="board">board</span></h1>
+  <p class="tagline">A file share, a chat and a bulletin board on one page — no login needed by default, no database. Just one text file.</p>
+  <div class="cta">
+    <a class="btn" href="https://github.com/xeedee-creator/tiltboard/releases/latest">Download tiltboard.exe</a>
+    <a class="btn alt" href="https://github.com/xeedee-creator/tiltboard">GitHub repository</a>
+  </div>
+</header>
+
+<section id="install">
+  <h2>Get started in ten seconds</h2>
+  <p><b>Windows:</b> download <code>tiltboard.exe</code> from the latest release, put it next to an optional <code>config.json</code> and double-click. A missing config is created with sensible defaults on first start; the board then answers at <code>http://localhost:8000</code>.</p>
+  <p><b>Any OS:</b> clone the repo (or grab a single <code>app.py</code>) and run it — Python 3.9+, zero dependencies.</p>
+<pre>git clone https://github.com/xeedee-creator/tiltboard.git
+python tiltboard/app.py            # → http://localhost:8000</pre>
+  <p>Open the page from any computer on your network (the LAN address is printed at startup), post, attach files, done.</p>
+</section>
+
+<section id="screens">
+  <h2>The board in action</h2>
+  <div class="shots">
+    <img src="screenshots/app_sample01.jpg" alt="Tiltboard glass theme — architecture project board with attached blueprint images and ratings">
+    <img src="screenshots/app_sample02.jpg" alt="Tiltboard neon theme — chat posts on a dark blue glowing grid">
+    <img src="screenshots/app_sample03.jpg" alt="Tiltboard floating theme — cards with deep soft shadows over a silver-grey background">
+  </div>
+</section>
+
+<section id="features">
+  <h2>Why teams keep it around</h2>
+  <ul class="grid">
+    <li><b>File sharing without limits</b>Drag &amp; drop or paste files straight into the post box — multi-GB verified (4&nbsp;GB). A chunked paperclip path with live in-box progress bar and resume-after-failure for flaky networks.</li>
+    <li><b>Bulletin board + chat</b>Posts are “tilts” on a grid: drag a card to swap it with another position, rate them 👍👎❤😀, search/filter live by text, author, attachment or content (<code>n:</code>, <code>u:</code>, <code>f:</code>, <code>c:</code> prefixes combine as AND).</li>
+    <li><b>No database — one file</b>The whole history lives in <code>chat.txt</code>; attachments in a plain folder. Back it up with any sync tool, move the board by copying two things.</li>
+    <li><b>Optional security (v2.1+)</b><code>pass_full_access</code> / <code>pass_read_only</code>: theme-styled login dialog, read-only visitors can see/download/rate but never post or delete. Failed attempts are logged.</li>
+    <li><b>Two-server sync (v2.0+)</b>Point <code>server_1_sync</code> + shared token at another Tiltboard: posts, ratings, deletions and reordering mirror both ways with automatic file transfer — even after offline periods.</li>
+    <li><b>Nine visual themes</b>Classic, paper, sunset, mono, terminal, midnight, neon (glowing edges), floating (deep shadows) and glass. Your choice is stored per-browser cookie; the default comes from config.json.</li>
+  </ul>
+</section>
+
+<section id="details">
+  <h2>Nice to know</h2>
+  <p><b>Formatting:</b> <code>\b<b>bold</code>, <code>\i<i>italic</code>, <code>\u<u>underline</code>, <code>~~strikethrough~~</code> — stackable in any order; plain text URLs (http/https/ftp) become clickable and open in a new tab. A built-in emoji picker ships with every page.</p>
+  <p><b>Your own header:</b> drop an optional <code>header.html</code> next to the app — it replaces the default top banner with your company name, logo etc., styled to match any theme, shown even on the login screen.</p>
+  <p><b>Mobile ready:</b> below ~700&nbsp;px the board collapses to a single column with compact bars — no second app needed for phones and tablets.</p>
+  <p><b>Made by an AI agent</b> in LM Studio Bionic (Qwen3.8-27B-Coder, GGUF on desktop hardware) — from first version to this release in a couple of weeks. See the README’s About section for the full story and per-model speed statistics.</p>
+</section>
+
+<footer>
+  <p>Tiltboard is licensed under GPLv3. Source: <a href="https://github.com/xeedee-creator/tiltboard">github.com/xeedee-creator/tiltboard</a></p>
+</footer>
+
+</div>
+</body>
+</html>
