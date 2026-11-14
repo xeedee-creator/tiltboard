@@ -1,0 +1,30 @@
+Eva: \bWelcome to the Diagonal Line board!\iEverything about our projects goes here from now on - renders, blueprints, planning and comments. Portfolio: http://diagonalline.eu/portfolio
+Mat: Plot 47 - first massing study for the review meeting 🚀 file:///C:/DiagonalLine/data/plot47_massing_v1.jpg 9a4c2e71_1
+Franz: The cantilevered lobby is the right call, this sells itself ::1:0:0:0
+Iveta: Family House No.3 - south facade, clay tile + thermowood 🦓 file:///C:/DiagonalLine/data/fh3_facade_study.jpg b7d01c4a_2
+Eva: \b\iPlot 47 update:\n- massing frozen by the client\n- curtain wall mock-up ordered\n~~parking garage - dropped, use public lot~~ ::0:0:0:0
+Mat: Plot 12 site plan with access and tree protection zones file:///C:/DiagonalLine/data/site_plan_plot12.png c8e5b92f_3
+Franz: \uCan we get a second opinion on the setbacks? The surveyor flagged the north line.
+Iveta: Office tower render v3 - double-height lobby, new glazing pattern 🚀🌏 file:///C:/DiagonalLine/data/office_tower_render_v3.png 4f9d2a8b_4
+Mat: \iThat dusk light on the glass is exactly what we want to show the client.
+Franz: Family House No.5 - south elevation, flat roof + deep eaves file:///C:/DiagonalLine/data/fh5_elevation_south.jpg 71c0de36_5
+Eva: ::0:0:1:0
+Iveta: Material board for the FH series 🦭 - oak, blackened steel, white lime plaster file:///C:/DiagonalLine/data/material_board_01.jpg a3b8e27d_6
+Mat: \bClient Q&A from Tuesday:\n- roof terrace: yes\n- home office on L2: yes\n- double garage: discussed, see note below
+Eva: ~~double garage - no\i, single + workshop instead~~ ::0:0:1:1
+Franz: Night view of the Plot 47 model - lobby glow test 🌙 file:///C:/DiagonalLine/data/night_view_model.jpg e5a1f0c2_7
+Iveta: \uThe warm 2700K lobby light wins. Keep it.
+Mat: Zoning change for Plot 47 is published, height limit raised to 42m ::1:0:0:0
+Eva: Next review meeting: Friday 14:00, bring all open questions 🚀
+Franz: \bFH3 facade - final palette\n➤︎ clay tile (R1)\n- thermowood louvres\n- black steel windows ::0:1:0:0
+Iveta: Site plan v2 - access moved to the east side after the surveyor note file:///C:/DiagonalLine/data/site_plan_plot12.png c8e5b92f_8
+Mat: \iSame file as before, just re-posted so the new version is on top.\nNo worries.
+Eva: Office tower - client confirmed the massing. We can start curtain wall engineering ::1:0:0:1👍
+Franz: Plot 47 floor plan L2 with home office file:///C:/DiagonalLine/data/plot47_massing_v1.jpg 9a4c2e71_9
+Iveta: 🚀 \bThat render goes straight into the marketing deck.
+Mat: FH5 south elevation - final. Deep eaves, flat roof, timber soffit file:///C:/DiagonalLine/data/fh5_elevation_south.jpg 71c0de36_10
+Eva: ::0:0:1:0🦓
+Franz: \bWeek summary:\n- Plot 47 massing frozen\n- FH3 facade palette locked\n- FH5 elevation finalised\n~~garage question - resolved as workshop~~ ::2:0:0:0
+Iveta: Material board v2, added zinc + white oak file:///C:/DiagonalLine/data/material_board_01.jpg a3b8e27d_11
+Mat: 💡 Remember: all client-facing renders go through Eva before they leave the house.
+Eva: Night view final - hero shot for the portfolio page. 🌙🚀 file:///C:/DiagonalLine/data/night_view_model.jpg e5a1f0c2_12

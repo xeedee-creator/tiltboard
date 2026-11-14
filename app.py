@@ -3043,11 +3043,16 @@ class Handler(BaseHTTPRequestHandler):
         def id_index(token):  # stable v2.0 line-ID token wins when the card carries one
             if not token:
                 return 0
+            hits = []
             for n, ln in enumerate(lines, 1):
                 m = LINE_ID_RE.search(ln)
                 if m and m.group(0).strip() == token:
-                    return n
-            return 0
+                    hits.append(n)
+            if len(hits) > 1:  # v2.2.x: duplicated line-ID - first match is ambiguous, say so loudly
+                log.warning("swap id '%s' occurs %d times (lines %s) - using the FIRST one; "
+                            "the board has duplicate line IDs, repair chat.txt tokens",
+                            token, len(hits), hits)
+            return hits[0] if hits else 0
         idxA, idxB = id_index(idA), id_index(idB)  # pre-sync rows fall back to /delete semantics
         if not idxA:  # same benign race as /delete and /rate accept for their index lookup
             idxA = find_post_line(textA, attachA)
