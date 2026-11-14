@@ -155,7 +155,7 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "2.2.0"  # v2.1.6: no pass_read_only + full password set -> visitors without a cookie
+VERSION = "2.3.0"  # v2.1.6: no pass_read_only + full password set -> visitors without a cookie
 #                  browse in read-only mode instead of the login dialog; the settings Login
 #                  button upgrades them to a full session with pass_full_access;
 # v2.1.5: tabs with an invalidated cookie stop polling after the first 401, and their /posts poll's
@@ -433,7 +433,8 @@ def _new_line_id(display_text: str) -> str:
     """v2.0.0 sync: fresh ID token for display text without rating tail; caller holds _chat_lock."""
     global _id_seq
     digest = hashlib.sha256(display_text.encode("utf-8")).hexdigest()[:8]
-    return f"{digest}_{_id_seq + 1}"
+    _id_seq += 1  # v2.2.x fix A: seq must never repeat - sync diff keys lines by this token (was read-only)
+    return f"{digest}_{_id_seq}"
 
 def split_line(line: str) -> tuple[str, str | None]:
     """Split a chat.txt line into (display text, attachment path or None)."""
@@ -482,6 +483,7 @@ def restore_posts() -> None:
             lines = [line.rstrip("\n") for line in f if line.strip()]
     except OSError:  # no chat.txt yet - first run
         return
+    POSTS.clear()  # v2.3.x sync fix A: rebuild, never append over stale entries (_sync_apply_lines re-runs this)
     log.info("restored %d tilt%s from chat.txt", len(lines), "" if len(lines) == 1 else "s")
     for line in lines:
         im = LINE_ID_RE.search(line)  # v2.2.0: read the sync ID from the raw line - split_line strips it internally
@@ -505,13 +507,15 @@ def persist_text(text: str, stored_name: str | None = None) -> None:
     the line becomes "<text> file:///<absolute path>", forward-slashed and
     %20-escaped so split_line() can read it back.
     """
+    display = text  # v2.2.x fix B: the attachment path must NOT feed the digest - identical tilts on
+    # boards with different data_folder paths mint ONE shared ID (remote diff + local dedupe rely on it)
     if stored_name:
         local = os.path.normpath(os.path.join(DATA_FOLDER, stored_name)) \
             .replace("\\", "/")  # E:\data\x.jpg -> E:/data/x.jpg ; UNC keeps //server
         text += f" file://{local.replace(' ', '%20')}"
     global _LAST_LINE_ID  # v2.2.0: add_post() reads it right after this call (same thread)
     with _chat_lock:  # v2.0.0: appends share one lock with delete/rate rewrites
-        token = _new_line_id(text)  # v2.0.0: new posts carry their stable ID at write time
+        token = _new_line_id(display)  # v2.0.0: new posts carry their stable ID at write time
         text += " " + token
         _LAST_LINE_ID = token  # v2.2.0: swap identity for the post being appended right now
         with open(CHAT_PATH, "a", encoding="utf-8") as f:
@@ -519,15 +523,16 @@ def persist_text(text: str, stored_name: str | None = None) -> None:
 
 
 def backfill_line_ids() -> None:
-    """v2.0.0 sync: one-time stable-ID assignment for pre-sync chat.txt history.
+    """v2.0.0 sync: stable-ID assignment for pre-sync chat.txt history + seq seed.
 
-    Idempotent - when every line already ends with an ID this is a no-op. Runs only
-    in main() when server_1_sync is configured; new posts get their IDs at write time
-    instead (persist_text).
+    Runs unconditionally - in main() and before every /sync/state answer we serve. Idempotent:
+    when every line already ends with an ID this is one read pass that only raises the
+    in-memory sequence counter above the file's highest seq, so a restart can never let
+    _new_line_id() reuse a number an existing line already carries (the passive /sync/state
+    map keys lines by ID and would silently collapse such a collision). New posts always get
+    their IDs at write time instead (persist_text).
     """
     global _id_seq
-    if not SYNC_REMOTE:
-        return  # pure single-server mode: zero overhead, no ID bookkeeping needed
     with _chat_lock:
         try:
             lines = open(CHAT_PATH, encoding="utf-8").read().splitlines()
@@ -542,7 +547,8 @@ def backfill_line_ids() -> None:
             if seq == 0:  # no ID yet - this is the pre-sync history
                 need = True
         if not need:
-            return  # every line already carries an identity - nothing to do
+            _id_seq = max(_id_seq, max_seq)  # restart seed: continue above every existing seq
+            return  # every line already carries an identity - nothing to write
         new_lines, n, changed = [], max_seq, 0
         for ln in lines:
             if not ln.strip():
@@ -2845,10 +2851,18 @@ class Handler(BaseHTTPRequestHandler):
                     raw_lines = [ln.rstrip("\n") for ln in f]
             except OSError:
                 raw_lines = []
+        dropped_no_id = 0
         for ln in raw_lines:  # skip blanks and the one-time backfill marker if present
             m = LINE_ID_RE.search(ln)
-            if m:
-                lines[m.group(0)] = ln
+            if not m:
+                if ln.strip():
+                    dropped_no_id += 1
+                    log.debug("sync/state: line without ID after backfill - %r", ln[:80])
+                continue
+            key = m.group(0)
+            if key in lines:  # v2.2.x: residual duplicate would be hidden by last-wins - surface it
+                log.warning("sync/state: duplicate line ID %s in chat.txt - earlier copy is shadowed", key.lstrip())
+            lines[key] = ln
         files = {}
         try:
             for entry in os.scandir(DATA_FOLDER):
@@ -2857,6 +2871,8 @@ class Handler(BaseHTTPRequestHandler):
                 files[entry.name] = entry.stat().st_size
         except OSError:
             pass
+        log.debug("sync/state serving to %s: %d line(s) with ID, %d file(s), dropped_no_id=%d, chat.txt lines total=%d",
+                  self.client_address[0], len(lines), len(files), dropped_no_id, len(raw_lines))
         self._send(200, json.dumps({"lines": lines, "files": files}).encode("utf-8"),
                    {"Content-Type": "application/json", "Cache-Control": "no-store"})
 
@@ -3343,10 +3359,53 @@ def _sync_pull_state() -> dict | None:
         req = urllib.request.Request(SYNC_REMOTE + "/sync/state",
                                      headers=_sync_headers())
         with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            state = json.loads(resp.read().decode("utf-8"))
+            log.debug("sync pull ok from %s: %d line(s), %d file(s)",
+                      SYNC_REMOTE, len(state.get("lines") or {}), len(state.get("files") or {}))
+            return state
     except Exception as e:
         log.debug("sync pull failed: %s", e)
         return None
+
+
+def _sync_rehome(line: str) -> str:
+    """Re-root a remote chat.txt line's trailing file:// token onto this board's data folder.
+
+    persist_text() bakes each peer's own absolute path into every attachment token, so one and the same
+    tilt carries different link roots on each side (file://D:/peer/data/x.jpg there vs ... here).
+    Sync fetches data files by stored name, so once downloaded the local file is at DATA_FOLDER/<name>;
+    only the root of the path inside the token needs rewriting. UNC tokens or names without a local
+    counterpart pass through untouched rather than being mangled."""
+    if not line:
+        return line
+    mid = LINE_ID_RE.search(line)   # trailing ID token would otherwise block the EOL attachment match below
+    body, idtok = ((line[:mid.start()] or "").rstrip(), mid.group(0)) if mid else (line, "")
+    m = ATTACH_RE.search(body)
+    if not m:
+        log.debug("sync_rehome: no attachment token in %r", line[:80])
+        return line  # no attachment tail - plain text, nothing to re-root
+    try:
+        parsed = urllib.parse.urlsplit(m.group(1))
+        netloc = parsed.netloc
+        path = urllib.parse.unquote(parsed.path)
+        if len(netloc) == 2 and netloc[1] == ":":   # file://D:/x/y.jpg -> drive sits in the netloc
+            name = os.path.basename((netloc + path).replace("/", os.sep))
+        elif netloc.startswith("//") or path.startswith("\\\\"):
+            log.debug("sync_rehome: UNC token left untouched in %r", m.group(1))
+            return line  # UNC - no local counterpart yet, leave alone
+        else:                                              # file:///D:/x/y.jpg -> drive in the path
+            name = os.path.basename(path.replace("/", os.sep))
+    except Exception:
+        log.debug("sync_rehome: unparseable token %r - left untouched", m.group(1))
+        return line  # unparseable token - leave it untouched
+    if not name or os.path.basename(name) != name \
+            or not os.path.isfile(os.path.join(DATA_FOLDER, name)):
+        log.debug("sync_rehome: local file NOT present for %r (expected in %s) - token left as-is",
+                  name, DATA_FOLDER)
+        return line  # must exist locally (sync fetched it by stored name)
+    local = "file://" + os.path.normpath(os.path.join(DATA_FOLDER, name)).replace("\\", "/")
+    log.debug("sync_rehome: %r -> %r", m.group(1), local)
+    return body[:m.start(1)] + local + idtok  # keep the separating space; re-append ID token byte-identical
 
 
 def _sync_apply_lines(state: dict) -> bool:
@@ -3355,12 +3414,16 @@ def _sync_apply_lines(state: dict) -> bool:
     raw_remote = state.get("lines") or {}
     if not raw_remote:
         return False
-    # keys arrive with LINE_ID_RE's leading space; drop it so every lookup below is space-free
-    remote = {k[1:] if k.startswith(" ") else k: v for k, v in raw_remote.items()}
+    # keys arrive with LINE_ID_RE's leading space; drop it so every lookup below is space-free,
+    # and re-root each remote line's attachment path onto our own data folder before comparing
+    remote = {k[1:] if k.startswith(" ") else k: _sync_rehome(v) for k, v in raw_remote.items()}
+    log.debug("sync apply: remote map has %d line(s)", len(remote))
     with open(CHAT_PATH, "r", encoding="utf-8", errors="replace") as fh:
         local_lines = [ln.rstrip("\n") for ln in fh if ln.strip()]
+    log.debug("sync apply: local chat.txt has %d non-empty line(s)", len(local_lines))
     local_ids: set[str] = set()
     keep: list[str] = []
+    dropped_lines: list[str] = []  # v2.3.x fix B: REMOTELY DELETED lines (strict mirror)
     conflict_lids: set[str] = set()  # same ID on both sides, different text -> remote wins
     for ln in local_lines:
         stripped, _seq = _strip_line_id(ln)
@@ -3371,17 +3434,29 @@ def _sync_apply_lines(state: dict) -> bool:
             continue
         local_ids.add(lid or ln)
         rtext = remote.get(lid) if lid else None
-        if lid is None or rtext is None:
-            keep.append(ln)  # ID-less line, or a local-only line - no counterpart on the peer
+        if lid is None:
+            keep.append(ln)  # ID-less line - no counterpart on the peer, never dropped
             continue
-        if rtext == stripped:
-            keep.append(ln)  # identical content on both sides - nothing to do
+        if rtext is None:
+            # v2.3.x sync fix B (strict mirror): a local line whose ID the remote map does not carry was
+            # deleted on the peer (or its forward was dropped) - drop it locally too and unlink an attachment
+            # nothing else references anymore. Safe: the forward queue drains before every pull, so no freshly-
+            # posted local line can be missing from a successful pull's map; a failed pull skips this whole pass.
+            dropped_lines.append(ln)
+            log.debug("sync apply: REMOTELY DELETED line %s -> dropping locally: %r", lid, stripped[:60])
+            continue
+        if _strip_line_id(rtext.rstrip("\n"))[0] == stripped:
+            keep.append(ln)  # identical content on both sides (IDs stripped from the remote value)
+            log.debug("sync apply: line %s IDENTICAL on both sides - kept", lid)
             continue
         conflict_lids.add(lid)  # dropped from keep; the remote copy is appended below
-    # NOTE: keys of the lines map are IDs; values are full line text with ID already at end.
-    # Remote-only IDs are appended as-is; conflict IDs replace their local copy at the tail.
-    # local_ids holds every local ID (kept or conflicting); a remote ID in neither set
-    # must be a new remote-only line and gets appended as-is.
+        log.debug("sync apply: CONFLICT id=%s local=%r remote=%r -> remote wins, local dropped",
+                  lid, stripped[:60], _strip_line_id(rtext.rstrip('\n'))[0][:60])
+    # NOTE: keys of the lines map are IDs in the peer's chat.txt line order; values carry full line
+    # text with that ID at end. That iteration IS the peer's authoritative sequence, so the rewrite
+    # below emits shared/conflict/remote-only lines exactly there instead of scattering them - a remote-
+    # only tilt must display where the peer shows it (their top = newest), not as our oldest tail line.
+    kept_ids: set[str] = set()
     to_append: list[str] = []
     for rid, rtext in remote.items():
         if rid == "::":
@@ -3394,19 +3469,84 @@ def _sync_apply_lines(state: dict) -> bool:
         else:
             rid_key = rid  # pre-backfill remote key form - tolerate it, never re-append ours
         if rid_key in local_ids and rid_key not in conflict_lids:
+            log.debug("sync apply: remote line %s already present locally - keep its peer position", rid_key)
             continue  # identical copy kept above, or a pre-backfill key we never re-append
-        to_append.append(rtext.rstrip("\n") + "\n")
+        to_append.append(rtext.rstrip("\n"))
+        kept_ids.add(rid_key)
+    # v2.3.x sync fix B: unlink attachments of REMOTELY DELETED lines when no surviving line still names
+    # them. Duplicate-tolerant by design - a name referenced by any kept/appended line stays on disk;
+    # conflict-lid drops are NOT handled here (their remote copy is appended; _sync_files fetches the file).
+    if dropped_lines:
+        surviving_names: set[str] = set()
+        for ln2 in [*keep, *(t.rstrip("\n") for t in to_append)]:
+            am = ATTACH_RE.search(_strip_line_id(ln2)[0])
+            if am:
+                surviving_names.add(am.group(1).rstrip("/").rsplit("/", 1)[-1].lower())
+        for ln3 in dropped_lines:
+            am = ATTACH_RE.search(_strip_line_id(ln3)[0])
+            if not am:
+                continue
+            name = unquote(am.group(1).rstrip("/").rsplit("/", 1)[-1].lower())
+            fpath = os.path.join(DATA_FOLDER, name)
+            if name in surviving_names:
+                log.debug("sync apply: dropped line %s attachment kept (still referenced): %r",
+                          _strip_line_id(ln3)[0][-24:], name)
+                continue
+            try:
+                if os.path.isfile(fpath):
+                    os.remove(fpath)
+                    log.info("sync unlink REMOTELY DELETED attachment: %s", fpath)
+                else:
+                    log.debug("sync apply: dropped line %s has no local attachment file to remove: %r",
+                              _strip_line_id(ln3)[0][-24:], name)
+            except OSError as exc:
+                log.warning("sync unlink REMOTELY DELETED attachment failed for %r - %s", fpath, exc)
+    # v2.3.x sync fix C (ordering): emit shared + remote-only lines in the PEER's map iteration order
+    # (= its chat.txt line order; new posts sit at file TOP there), then any local-only leftovers - id-
+    # less legacy and duplicate-ID defensive keeps - after them. Dropped/conflict lines stay excluded as
+    # before. Content of a shared line is our own byte text (already re-homed); only its position may move.
+    new_lines: list[str] = []
+    local_by_id: dict[str, str] = {}
+    for ln in keep:
+        m2 = LINE_ID_RE.search(ln)
+        lid2 = m2.group(0)[1:] if m2 else None
+        if lid2 and lid2 not in local_by_id:
+            local_by_id[lid2] = ln
+    moved_lids: list[str] = []
+    placed_ids: set[str] = set()  # lids already emitted at their peer slot - leftovers below keep only what this missed
+    for rid, rtext in remote.items():
+        if rid == "::":
+            continue
+        stripped_r, _seq = _strip_line_id(rtext.rstrip("\n"))
+        m3 = LINE_ID_RE.search(stripped_r) or LINE_ID_RE.search(rtext.rstrip("\n"))
+        rlid2 = m3.group(0)[1:] if m3 else None
+        rid_key2 = rlid2 if rlid2 is not None else rid
+        ln_local = local_by_id.get(rid_key2)
+        placed_ids.add(rid_key2)
+        if ln_local is not None and rid_key2 in conflict_lids:
+            new_lines.append(rtext.rstrip("\n"))  # conflict - peer's copy wins content AND position
+        elif ln_local is not None:
+            new_lines.append(ln_local)            # shared identical text, now at the peer's slot
+            if local_lines.index(ln_local) != len(new_lines):
+                moved_lids.append(rid_key2)
+        elif rid_key2 in kept_ids:                # remote-only / pre-backfill - was appended at our tail before
+            new_lines.append(rtext.rstrip("\n"))
+    for ln in keep:  # leftovers - id-less legacy lines + duplicate-ID defensive keeps, never moved by this pass
+        m4 = LINE_ID_RE.search(ln)
+        lid3 = m4.group(0)[1:] if m4 else None
+        if lid3 is None or lid3 not in placed_ids:
+            new_lines.append(ln)
+    log.debug("sync apply: verdict - %d local line(s), %d kept (drops=%d conflict-lid), peer order %d line(s)%s",
+              len(local_lines), len(keep), len(local_lines) - len(keep), len(new_lines),
+              ", moved " + str(moved_lids) if moved_lids else "")
     changed = False
-    if len(keep) != len(local_lines):
+    if new_lines != local_lines:
+        log.debug("sync apply: REWRITING chat.txt to peer sequence (%d -> %d lines)", len(local_lines), len(new_lines))
         tmp = CHAT_PATH + ".sync.tmp"
         with open(tmp, "w", encoding="utf-8", newline="") as fh:
-            for ln in keep:
+            for ln in new_lines:
                 fh.write(ln + "\n")
         os.replace(tmp, CHAT_PATH)
-        changed = True
-    if to_append:
-        with open(CHAT_PATH, "a", encoding="utf-8", newline="") as fh:
-            fh.writelines(to_append)
         changed = True
     if changed:
         restore_posts()
@@ -3425,6 +3565,7 @@ def _sync_fetch_file(name: str, size: int) -> None:
                 have = int(fh.read().strip() or 0)
         except Exception:
             have = 0
+        log.debug("sync fetch %s: resuming from offset %d of %d", name, have, size)
     url = SYNC_REMOTE + "/files/" + urllib.parse.quote(name)
     while True:
         headers = _sync_headers()
@@ -3506,6 +3647,9 @@ def _sync_files(state: dict) -> None:
             t.start()
     if count:
         log.info("sync fetch pool started: %d file(s), worker cap %d", count, min(_FETCH_WORKERS, count))
+    else:
+        log.debug("sync files: all %d remote file(s) already present locally - nothing to download",
+                  len(remote))
     for t in threads:  # join every worker; each keeps claiming until the queue is dry
         t.join()
 
@@ -3513,13 +3657,17 @@ def _sync_files(state: dict) -> None:
 def _sync_worker() -> None:
     log.info("sync worker started: mirroring %s", SYNC_REMOTE)
     first_tick = True
+    tick_no = 0
     while True:
         try:
             _sync_wake.wait(timeout=_SYNC_TICK)
             _sync_wake.clear()
             _sync_forward_queue()
+            tick_no += 1
+            log.debug("sync worker: tick #%d", tick_no)
             state = _sync_pull_state()
             if not isinstance(state, dict):
+                log.debug("sync worker: tick #%d got no state (peer unreachable) - skipping diff", tick_no)
                 continue  # next tick after a quiet backoff-free gap
             ok = _sync_apply_lines(state) 
             if not ok and first_tick:
@@ -3536,7 +3684,7 @@ def _sync_worker() -> None:
 
 
 def main():
-    backfill_line_ids()  # v2.0.0 sync: one-time stable-ID assignment (no-op without server_1_sync)
+    backfill_line_ids()  # v2.0.0 sync: stable-ID backfill + _id_seq seed (idempotent, always runs)
     restore_posts()
     if SYNC_REMOTE:  # v2.0.0 active side - start the sync daemon before serving
         threading.Thread(target=_sync_worker, name="tiltboard-sync", daemon=True).start()

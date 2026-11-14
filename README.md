@@ -19,6 +19,8 @@ A file share, a chat and a bulletin board on one page - with none of the usual c
 
 Posted texts persist to `chat.txt` (one line per tilt, newest last) and are restored on restart — the file grows without bound; the board simply pages through it in row-major chunks of *Rows* × *Columns* cards. Tilt angle and color are re-rolled randomly each time.
 
+Full-access visitors can also reorder the board by hand: press a card's empty background, drag it onto another card and release — the two tilts swap places in `chat.txt` and stay there across restarts (read-only sessions keep browsing and reacting as before).
+
 ## Formatting
 
 A small escape set works inside the message box; everything you type is stored literally (one line per tilt) and interpreted only when rendering, so it also survives restarts:
@@ -178,4 +180,4 @@ Tiltboard was created fully by an AI agent running in **LM Studio Bionic** — e
 - **Measured speed** (decode throughput from the November 2026 server logs, per-step `tg` samples): the Q8MTP build averaged a **median of ~14.5 t/s** (mean 34.3, unstable — half of all steps below 25 t/s) over ~328k tokens; the current MTP build holds a **stable median of ~57 t/s** (p25–p75: 43–72, peaks to 109) across ~950k tokens — roughly a 4× speedup that made long agent sessions practical.
 - **Memory / KV cache:** ~40K context (40960) with flash attention and a unified, fully GPU-resident KV cache. The K cache is quantized to Q4_0 while the V cache stays at full precision — an asymmetric setup that keeps the big context affordable in VRAM without the slowdown of double-quantizing both tensors. MTP speculative decoding is enabled (draft tokens 0–3 per step). Initial settings were a Q8_0 K/V pair at 16K context; they were swapped for this configuration to fix slow response times.
 - **Hardware:** NVIDIA GeForce RTX 4090, 24 GB VRAM (driver 621.01).
-- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v2.1.6 of 2026-11-13 — fifty-nine released versions across nine days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting, auto-linked URLs, tilt rating, server-to-server sync, optional password login incl. guest read-only mode), and development continues.
+- **Timeline:** v1.0.0 started on 2026-11-05; the latest release is v2.3.0 of 2026-11-14 — sixty-one released versions across nine days of interactive sessions (board grid and pagination, extended navigation, search bar, per-theme header frame, routed uploads with live progress, mobile layout, multiple attachments, per-word text formatting, auto-linked URLs, tilt rating, server-to-server sync, optional password login incl. guest read-only mode, card reordering by drag), and development continues.

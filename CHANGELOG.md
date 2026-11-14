@@ -2,6 +2,22 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-11-14
+
+### Fixed
+- **Synced boards now converge to the same card order** — with two servers mirroring each other, reordering on one side (drag-swap) was not reliably followed by the other: lines existed on both `chat.txt` files, but in a different sequence. The sync apply step is now peer-authoritative about order — an already-known line whose position changed on the remote side moves it into place locally instead of being skipped as "already present" — so both boards settle on identical ordering after every swap, including swaps performed while one server was offline and replayed when it came back.
+- **Duplicate line IDs no longer vanish during sync** — defensive keep of lines that carry an ID the other side already owns (a sync race can briefly produce two tokens for the same tilt); both copies are kept verbatim so a user can delete whichever they want, instead of one copy being silently dropped.
+
+### Added
+- **Fresh `tiltboard.exe` with the new icon set** — rebuilt as a true multi-size `.ico` (16/32/48/64/128/256) from the provided PNG collection and compiled into the binary; Explorer and the taskbar now show the Tiltboard mark instead of the default placeholder.
+
+## [2.2.0] - 2026-11-13
+
+### Added
+- **Reorder cards by dragging them onto each other** — with full access, press and hold a card's empty background (never its text or picture) and move more than 5 px: the original slot turns into a dimmed placeholder while a transparent clone sticks to your cursor, and no text gets selected on the way. Release inside another card's inner zone and both tilts swap places in `chat.txt`, then the page reloads with the new order; dropping back onto itself, releasing outside any card, or an otherwise invalid target changes nothing ("Swap failed - your board was not changed."). A symmetric index guard makes even moving the first (top-left) card anywhere safe. Read-only sessions can still only browse and react — they never see the drag at all.
+- **Unified drag preview on every tilt** — while a drag is in flight each real card reacts exactly the same way: it shrinks slightly and sways side to side, the dimmed source slot included; the clone under the cursor stays perfectly static, and releasing stops all motion at once so the theme's normal hover zoom returns immediately.
+- **Fresh single-file `tiltboard.exe`** — rebuilt from this code with PyInstaller via tiltboard.spec (Windows x64); first run still creates a default config.json, an empty chat.txt and data/ next to itself.
+
 ## [2.1.6] - 2026-11-13
 
 ### Added
