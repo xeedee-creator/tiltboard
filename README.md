@@ -61,6 +61,25 @@ Uploads are routed by how they arrive: files **dragged onto the box or pasted** 
 
 While the paperclip path is uploading, progress renders *inside* the text box: a semi-transparent blue fill grows across it (typed text stays readable underneath) and a small label pill in its top-right corner shows `filename - x.x MB of y.y MB`, refreshing after every slice. The overlay tracks the box's real height, so even multi-line boxes never show progress spilling past their border.
 
+### What gets rendered on a card
+
+Every attachment type has a preview strategy; anything unlisted falls back to the plain 📄 download icon (the file still downloads fine):
+
+| Attached as       | Card shows                                                        |
+|-------------------|-------------------------------------------------------------------|
+| Image (png/jpg/…) | full picture, scaled to fit the card                              |
+| PDF               | page 1 rendered by pdf.js                                         |
+| Word `.docx`      | document body via mammoth                                         |
+| Excel `.xlsx`     | first sheet as a table (SheetJS)                                  |
+| Markdown `.md`    | rendered text (marked)                                            |
+| Plain text        | small-font snippet of the start, truncated at card edge           |
+| HTML              | sandboxed inline preview of the document                          |
+| RTF               | canvas rendering via rtfjs                                        |
+| WMF               | server-side rasterized to PNG (PowerShell GDI+), then shown       |
+| `.ico` / `.exe`   | first embedded icon, centered at native size                      |
+
+Preview parsers are tiny local libraries served from the `libs/` folder next to app.py — no external requests ever leave your network.
+
 ## Search
 
 The magnifier icon (left of the settings gear) toggles a search bar that live-filters **all** of chat.txt, not just the visible page. At least three characters activate it; matching tilts render exactly like normal posts and the pagers hide while filtering — closing the bar brings back your usual page view.

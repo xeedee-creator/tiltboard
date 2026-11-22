@@ -57,6 +57,13 @@ if not os.path.isfile(FAVICON_PATH):
     _bundled_fav = getattr(sys, "_MEIPASS", None)
     if _bundled_fav and os.path.isfile(os.path.join(_bundled_fav, "app.ico")):
         FAVICON_PATH = os.path.join(_bundled_fav, "app.ico")
+# v2.4.x: preview libraries (pdf.js / mammoth / marked / xlsx / rtfjs) ship
+# inside the .exe like styles; a libs/ folder next to the program wins.
+LIBS_DIR = os.path.join(BASE_DIR, "libs")
+if not os.path.isdir(LIBS_DIR):
+    _bundled_libs = getattr(sys, "_MEIPASS", None)
+    if _bundled_libs and os.path.isdir(os.path.join(_bundled_libs, "libs")):
+        LIBS_DIR = os.path.join(_bundled_libs, "libs")
 
 
 class _DebugRotatingHandler(RotatingFileHandler):
@@ -2929,7 +2936,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, body, {"Content-Type": "application/json", "Cache-Control": "no-store"})
         elif path.startswith("/libs/"):   # v2.3.0: preview libraries (pdf.js / mammoth / marked) from <app-folder>/libs/
             name = unquote(path[len("/libs/"):])
-            root = os.path.realpath(os.path.join(BASE_DIR, "libs"))
+            root = os.path.realpath(LIBS_DIR)
             real = os.path.realpath(os.path.join(root, name))  # traversal guard (same rule as /logo/, /files/)
             try:
                 contained = os.path.commonpath([real, root]) == root

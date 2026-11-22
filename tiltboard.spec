@@ -5,7 +5,9 @@ a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('styles', 'styles'), ('config.json', 'bundled'), ('app.ico', '.')],  # config = first-run template; app.ico = favicon + exe icon
+    datas=[('styles', 'styles'), ('libs', 'libs'), ('config.json', 'bundled'), ('app.ico', '.')],
+    # styles/libs/config bundle inside the .exe; libs = card-preview parsers
+    # (pdf.js, mammoth, marked, xlsx, rtfjs); a local folder of each name wins.
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

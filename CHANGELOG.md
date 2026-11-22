@@ -11,6 +11,7 @@ All notable changes to Tiltboard are documented here. Format follows [Keep a Cha
 
 ### Fixed
 - Filenames with national characters or spaces no longer break preview fetches or chunked uploads (proper URL encoding plus ISO-8859-1-safe request headers).
+- Very long filenames no longer lose their ending or extension - only the sanitized stem (name without extension) is capped at 170 chars instead of cutting the whole name at 60.
 - Interrupted file downloads now log a quiet one-liner (`client … dropped stream`) instead of dumping a full traceback.
 - Stray references to `/screenshots/*` removed — the board no longer 404s on them.
 
