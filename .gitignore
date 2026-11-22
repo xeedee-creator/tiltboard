@@ -37,3 +37,7 @@ logo/
 
 # The standalone binary is published as a GitHub Release asset only, not in the repo.
 tiltboard.exe
+
+# Agent tooling and session state - local only, never committed.
+__harness_agent__/
+SESSION_STATE.md

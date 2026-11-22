@@ -2,6 +2,18 @@
 
 All notable changes to Tiltboard are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-11-22
+
+### Added
+- **In-card file previews** — attachments render on the card instead of a bare download icon: PDF (page 1, pdf.js), Word .docx (mammoth), Markdown (marked), Excel .xlsx (first sheet as a table, SheetJS), plain-text files (.txt/.log/.ini/… in a small truncated font), HTML (sandboxed inline preview), RTF (rtfjs canvas) and WMF vector images (rasterized server-side to PNG).
+- **Icon cards for .ico / .exe** — the first embedded PE icon is extracted via PowerShell `ExtractAssociatedIcon` and shown centered on the card at native size.
+- New `libs/` folder holding the browser rendering libraries (pdf.js, mammoth, marked, SheetJS, rtfjs), committed with the project.
+
+### Fixed
+- Filenames with national characters or spaces no longer break preview fetches or chunked uploads (proper URL encoding plus ISO-8859-1-safe request headers).
+- Interrupted file downloads now log a quiet one-liner (`client … dropped stream`) instead of dumping a full traceback.
+- Stray references to `/screenshots/*` removed — the board no longer 404s on them.
+
 ## [2.3.0] - 2026-11-14
 
 ### Fixed

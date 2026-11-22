@@ -19,6 +19,7 @@ import os
 import random
 import re
 import socket
+import subprocess  # v2.4.x: WMF rasterization via Windows System.Drawing
 import sys
 import hashlib
 import hmac  # v2.1.0: signed tb_auth cookie (no session table)
@@ -155,7 +156,7 @@ def _init_logging() -> logging.Logger:
 
 
 log = _init_logging()
-VERSION = "2.3.0"  # v2.1.6: no pass_read_only + full password set -> visitors without a cookie
+VERSION = "2.4.0"  # v2.1.6: no pass_read_only + full password set -> visitors without a cookie
 #                  browse in read-only mode instead of the login dialog; the settings Login
 #                  button upgrades them to a full session with pass_full_access;
 # v2.1.5: tabs with an invalidated cookie stop polling after the first 401, and their /posts poll's
@@ -169,6 +170,24 @@ DEFAULT_ROWS, DEFAULT_COLUMNS = 35, 1  # board grid when config.json lacks rows/
 MAX_ROWS, MAX_COLUMNS = 1000, 100      # hard validation bounds for the same keys
 NUM_COLORS = 10  # each stylesheet defines its own palette for data-c="0..9"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+# v2.3.0: in-card preview types for non-image attachments; anything not listed
+# here (old .xls binary format has no client-side renderer) keeps the download link only.
+PREVIEW_TYPES = {
+    ".pdf": "pdf",
+    ".docx": "office", ".odt": "office",
+    ".xlsx": "excel",
+    ".md": "markdown", ".markdown": "markdown",
+    ".rtf": "rtf",
+    ".wmf": "wmf",   # v2.4.x: bare metafile / native icon / exe's first icon - GDI+ raster on server
+    ".ico": "ico",
+    ".exe": "exe",
+    ".txt": "text", ".log": "text", ".csv": "text", ".json": "text",
+    ".ini": "text", ".conf": "text", ".xml": "text", ".yaml": "text", ".yml": "text",
+    ".html": "html", ".htm": "html",
+    ".mp4": "media", ".webm": "media",
+    ".ogg": "media", ".oga": "media", ".mp3": "media", ".wav": "media",
+    ".flac": "media", ".m4a": "media", ".opus": "media", ".aac": "media",
+}
 
 
 def load_config() -> dict:
@@ -614,8 +633,9 @@ def describe_attach(local_path: str | None) -> dict | None:
     except ValueError:
         return None
     name = os.path.basename(real)
+    ext = os.path.splitext(name)[1].lower()
     return {"url": "/files/" + quote(name), "name": name,
-            "is_image": os.path.splitext(name)[1].lower() in IMAGE_EXTS}
+            "is_image": ext in IMAGE_EXTS, "preview": PREVIEW_TYPES.get(ext)}
 
 
 # v1.16.2 - paperclip attachments ALWAYS upload chunk-by-chunk (see /upload/init,
@@ -633,8 +653,12 @@ def reserve_upload(filename: str) -> str | None:
     race-safe. The client then streams chunks into it; /post commits the name.
     """
     base = os.path.basename((filename or "").replace("\\", "/"))
-    safe = re.sub(r"[^\w.\-]+", "_", base).strip("._")[:60] or "file"
+    # v2.4.x: the old [:60] cut the WHOLE name including its extension - a long Czech .docx title lost both its tail and ending. Windows MAX_PATH leaves ~180 chars inside data/, so cap only the sanitized STEM at 170; the extension always survives.
+    safe = re.sub(r"[^\w.\-]+", "_", base).strip("._") or "file"
     stem, ext = os.path.splitext(safe)
+    if len(stem) > 170:   # very long title: keep the ending readable, never drop its type
+        safe = f"{stem[:170]}{ext}"
+        stem = stem[:170]
     n = 0
     while True:
         stored_name = f"{stem}_{n}{ext}" if n else safe
@@ -669,8 +693,12 @@ def save_upload(filename: str, data: bytes) -> str | None:
     returns the stored file name or None when nothing could be written.
     """
     base = os.path.basename((filename or "").replace("\\", "/"))
-    safe = re.sub(r"[^\w.\-]+", "_", base).strip("._")[:60] or "file"
+    # v2.4.x: the old [:60] cut the WHOLE name including its extension - a long Czech .docx title lost both its tail and ending. Windows MAX_PATH leaves ~180 chars inside data/, so cap only the sanitized STEM at 170; the extension always survives.
+    safe = re.sub(r"[^\w.\-]+", "_", base).strip("._") or "file"
     stem, ext = os.path.splitext(safe)
+    if len(stem) > 170:   # very long title: keep the ending readable, never drop its type
+        safe = f"{stem[:170]}{ext}"
+        stem = stem[:170]
     n = 0
     while True:
         stored_name = f"{stem}_{n}{ext}" if n else safe
@@ -688,22 +716,33 @@ def save_upload(filename: str, data: bytes) -> str | None:
 def parse_multipart(body: bytes, content_type: str):
     """Minimal multipart/form-data parser (the cgi module vanished in 3.13).
 
+    v2.4.0: raw-bytes boundary split instead of BytesParser - the email header
+    grammar mangled non-latin-1 filename bytes (Czech etc.) and dropped such
+    parts from `files` entirely, so a drop produced a post without attachment.
+    Browsers always send unescaped UTF-8 inside filename="..."; spaces are fine.
+
     Returns (fields dict, list of (field_name, filename, payload_bytes)).
     """
-    msg = BytesParser(policy=email.policy.default).parsebytes(
-        b"Content-Type: " + content_type.encode("latin-1", "replace") + b"\r\n\r\n" + body)
     fields: dict[str, str] = {}
     files: list[tuple[str, str | None, bytes]] = []
-    for part in msg.iter_parts():
-        name = part.get_param("name", header="content-disposition")
-        if not name:
+    m = re.search(r'boundary="?([^";]+)"?', content_type or "")
+    if not m:
+        return fields, files
+    delim = b"--" + m.group(1).encode("latin-1", "replace")
+    for chunk in body.split(delim):
+        if not chunk or chunk.startswith(b"--"):  # piece before first boundary / final terminator
             continue
-        filename = part.get_filename()
-        payload = part.get_payload(decode=True) or b""
-        if filename:
-            files.append((str(name), str(filename), payload))
-        else:
-            fields[str(name)] = (payload.decode("utf-8", "replace"))
+        part = chunk.lstrip(b"\r\n")  # the CRLF after each boundary line
+        if part.endswith(b"\r\n"):    # framing CRLF before the next delimiter - never payload (RFC 2046)
+            part = part[:-2]
+        raw_head, _, payload = part.partition(b"\r\n\r\n")
+        name_m = re.search(rb'name="([^"]*)"', raw_head)
+        file_m = re.search(rb'filename="([^"]*)"', raw_head)
+        if not name_m:
+            continue
+        fname = file_m.group(1).decode("utf-8", "replace") if file_m else None
+        (files.append((name_m.group(1).decode("latin-1"), fname, payload))
+         if fname is not None else fields.__setitem__(name_m.group(1).decode("latin-1"), payload.decode("utf-8", "replace")))
     return fields, files
 
 
@@ -1212,7 +1251,7 @@ if (window.TB_RO) { document.querySelectorAll(".composer, .del").forEach(functio
             showUpload(file.name + label(), 0, file.size);   // v1.16.x: overlay appears as soon as the transfer starts
             for (let off = 0; off < file.size; off += SLOW_CHUNK) {   // ~8 MB slices normally, ~256 kB in slow_upload mode; server streams to disk in 1 MB reads
               await step("chunk " + Math.round(off / SLOW_CHUNK + 1), () =>    // v1.22.0: slowStep (30 s cadence) when SLOW_UPLOAD, withRetry otherwise
-                fetch("/upload/chunk", { method: "POST", headers: { "X-Stored-Name": stored, "X-Chunk-Offset": String(off) }, body: file.slice(off, Math.min(off + SLOW_CHUNK, file.size)) })
+                fetch("/upload/chunk", { method: "POST", headers: { "X-Stored-Name": encodeURIComponent(stored), "X-Chunk-Offset": String(off) }, body: file.slice(off, Math.min(off + SLOW_CHUNK, file.size)) })  // v2.4.x: header must stay ISO-8859-1 - national chars percent-encoded here, unquoted on the server
                   .then((r) => { if (!r.ok) throw new Error("HTTP " + r.status); }));
               showUpload(file.name + label(), off + SLOW_CHUNK, file.size);   // v1.16.x: advance the bar after each successful slice
             }
@@ -1416,13 +1455,28 @@ if (window.TB_RO) { document.querySelectorAll(".composer, .del").forEach(functio
           wrap.appendChild(dl);
           div.appendChild(span);
           div.appendChild(wrap);
-        } else {                                       // data file -> download link
+        } else if (post.attach.preview) {              // v2.3.0: in-card preview + download link
+          const slot = document.createElement("span");
+          slot.className = "preview-slot";
+          slot.dataset.type = post.attach.preview;
+          slot.dataset.url = post.attach.url;           // same URL the server HTML uses
+          div.appendChild(span);
+          div.appendChild(slot);
+        } else {                                       // data file -> download link only
           const a = document.createElement("a");
           a.href = post.attach.url;
           a.className = "download";
           a.textContent = "\u{1F4C4} " + post.attach.name;
           div.appendChild(span);
           div.appendChild(a);
+        }
+        if (post.attach && post.attach.preview) {      // download link kept on every card
+          const dl2 = document.createElement("a");
+          dl2.href = post.attach.url;                  // downloads with the original name
+          dl2.download = post.attach.name;
+          dl2.className = "download";
+          dl2.textContent = "\u{1F4C4} " + post.attach.name;
+          div.appendChild(dl2);
         }
       } else div.appendChild(span);
       // v1.5.4: same delete cross + identity as the server-rendered cards
@@ -1459,6 +1513,7 @@ if (window.TB_RO) { document.querySelectorAll(".composer, .del").forEach(functio
     board.replaceChildren(frag);
     markRated();  // v1.23.0 fix: re-apply vote marks AFTER the swap - marking the
                   // old DOM before replaceChildren was a no-op (re-rate bug)
+    if (window.tbRebootPreviews) window.tbRebootPreviews();  // v2.4.x: fresh slots need rendering
   }
 
   // v1.7.0: per-visitor board grid - this user's own rows x columns decides
@@ -1925,6 +1980,185 @@ if (window.TB_RO) { document.querySelectorAll(".composer, .del").forEach(functio
   });
 })();
 </script>
+<script>
+// v2.3.0: attachment previews inside cards - pdf / office (docx|odt) / markdown /
+// plain text / html / media. Libraries are fetched from /libs/ on demand and cached
+// per browser session; every card keeps its download link regardless of preview type.
+(function () {
+  "use strict";
+  var loaded = {};                                       // url -> Promise, load each lib once
+  function loadLib(url) {
+    if (!loaded[url]) loaded[url] = new Promise(function (res, rej) {
+      var s = document.createElement("script");
+      s.src = url;                                        // /libs/* served with year-long cache
+      s.onload = res;
+      s.onerror = function () { rej(new Error("lib failed: " + url)); };
+      document.head.appendChild(s);
+    });
+    return loaded[url];
+  }
+  var pdfWorkerSet = false;
+  async function renderPdf(slot) {
+    await loadLib("/libs/pdf.js-3.11.174.min.js");
+    if (!pdfWorkerSet) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = "/libs/pdf.worker.min.js"; pdfWorkerSet = true; }
+    var r = await fetch(slot.dataset.url);                // /files/ sets the real Content-Type
+    var doc = await window.pdfjsLib.getDocument({ data: await r.arrayBuffer() }).promise;
+    var page = await doc.getPage(1);
+    var base = page.getViewport({ scale: 1 });
+    /* v2.4.x: clientWidth includes the slot's padding - subtract it so the
+       canvas keeps a visible gap to every card edge instead of touching one */
+    var pcs = getComputedStyle(slot);
+    var avail = (slot.clientWidth || 360) - parseFloat(pcs.paddingLeft || 0) - parseFloat(pcs.paddingRight || 0);
+    var fitW = Math.min(avail, base.width);                  // fit-to-width
+    var view = page.getViewport({ scale: fitW / base.width });
+    if (view.height > 520) view = page.getViewport({ scale: 520 / base.height });   // max-height clamp
+    var cv = document.createElement("canvas");            // pdf.js draws to a canvas, not HTML
+    cv.width = Math.floor(view.width);
+    cv.height = Math.floor(view.height);
+    await page.render({ canvasContext: cv.getContext("2d"), viewport: view }).promise;
+    slot.appendChild(cv);
+  }
+  async function renderHtmlDoc(slot) {                    // docx / odt -> capped HTML
+    await loadLib("/libs/mammoth.browser.min.js");
+    var r = await fetch(slot.dataset.url);                // mammoth needs an ArrayBuffer
+    var res = await window.mammoth.convertToHtml({ arrayBuffer: await r.arrayBuffer() });
+    capBlocks(slot, res.value);
+  }
+  async function renderMarkdown(slot) {
+    await loadLib("/libs/marked.min.js");                 // v4 UMD exposes marked.parse
+    var r = await fetch(slot.dataset.url);                // text/markdown - plain fetch is enough
+    capBlocks(slot, window.marked.parse(await r.text()));
+  }
+  async function renderExcel(slot) {                      // v2.5.x: .xlsx -> SheetJS table (first sheet only)
+    await loadLib("/libs/xlsx.full.min.js");              // UMD exposes window.XLSX
+    var r = await fetch(slot.dataset.url);                // /files/ sets the real Content-Type
+    var wb = window.XLSX.read(await r.arrayBuffer(), { type: "array" });
+    if (!wb.SheetNames.length) throw new Error("workbook has no sheets");
+    capBlocks(slot, window.XLSX.utils.sheet_to_html(wb.Sheets[wb.SheetNames[0]], { header: "", footer: "" }));
+  }
+  function capBlocks(slot, html) {                        // ~20 block lines / ~800 chars + hint
+    // v2.5.x: kill disallowed <img> refs in the SOURCE before DOM insertion - README.md's
+    // "screenshots/..." used to hit :8000 and 404 on every card render; only our own file
+    // stream, data: URIs or absolute http(s) may load at all.
+    html = String(html).replace(/<img\b[^>]*>/gi,
+      (tag) => { const m = /src=["']?([^"' >]+)/i.exec(tag); return (m && /^(?:\/files\/|data:|https?:\/\/)/.test(m[1])) ? tag : ""; });
+    slot.innerHTML = html;
+    for (const im of slot.querySelectorAll("img"))        // v2.4.1: images embedded in a preview that can't load vanish -
+      if (!/^(?:\/files\/|data:|https?:\/\/)/i.test(im.getAttribute("src") || "")) {  // relative paths would hit :8000 and 404 (e.g. README.md
+        im.remove();                                       // screenshots) instead of showing a broken box
+      } else if (im.complete && !im.naturalWidth) im.remove();
+      else im.addEventListener("error", () => im.remove()); // remote/absolute src that fails later is removed too
+    if (slot.textContent.length > 800 || slot.children.length > 24)
+      slot.appendChild(hint());                           // CSS max-height is the backstop
+  }
+  async function renderRtf(slot) {                        // v2.5.x: real RTF rendering via rtfjs (libs/rtfjs.global.js - canvas per page)
+    try {
+      await loadLib("/libs/rtfjs.global.js");             // UMD script tag -> window.RTFRenderer
+      var src = await (await fetch(slot.dataset.url)).text();   // .rtf is plain text to a browser fetch
+      slot.innerHTML = "";
+      var res = window.RTFRenderer.render(src, slot);    // sync parse->layout->canvas, stacked vertically in the slot
+      for (let i = 0; i < res.canvases.length; i++) {
+        const cv = res.canvases[i];
+        if (i > 0) { cv.remove(); continue; }             // first page only - full document stays in the download
+        cv.style.maxWidth = "100%";
+        cv.style.height = "auto";
+      }
+      if (!res || !res.pageCount) throw new Error("rtfjs produced no pages");
+    } catch (e) {
+      await renderRtfLegacy(slot);                       // corrupt rtf / lib missing -> v2.3.0 plain-text preview
+    }
+  }
+  async function renderRtfLegacy(slot) {                 // v2.3.0 plain-text backup - kept for rollback
+    var src = await (await fetch(slot.dataset.url)).text();
+    src = src.replace(/(?:\\'[0-9a-fA-F]{2})+/gi, (m) => {                   // 'hh runs are UTF-8 bytes of one character
+      var b = [];
+      for (var i = 0; i < m.length; i += 4) b.push(parseInt(m.substr(i + 2, 2), 16));
+      try { return new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b)); } catch (e) { return ""; }
+    });
+    src = src.replace(/\\u(\d+)\s?[?!]/g, (m, d) => String.fromCharCode((parseInt(d) + 0x10000) % 0x10000)); // \uN? unicode escape
+    src = src.replace(/\\(?:par|line|sect)\b/g, "\n");                      // paragraph / line breaks survive as newlines
+    src = src.replace(/\\(?:[a-zA-Z]+-?\d*|[^\s0-9])\s?/g, " ");           // every control word AND symbol (\fs24 \*, \~, ...) -> space: plain text only
+    src = src.replace(/[{}]/g, "");                                          // group braces vanish entirely
+    var lines = src.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 20);   // first ~20 real lines only
+    slot.innerHTML = "";
+    var pre = document.createElement("pre");              // same capped <pre> as plain text files
+    pre.textContent = lines.join("\n") + (lines.length ? "…" : "");
+    slot.appendChild(pre);
+  }
+  async function renderText(slot) {                       // log / csv / ini / conf ... capped <pre>
+    var r = await fetch(slot.dataset.url);
+    var lines = (await r.text()).split(/\r?\n/).slice(0, 20);   // first ~20 lines only
+    slot.innerHTML = "";
+    var pre = document.createElement("pre");              // monospace preview of the raw content
+    pre.textContent = lines.join("\n") + (lines.length ? "…" : "");
+    slot.appendChild(pre);
+  }
+  function renderIframe(slot) {                           // html file: sandbox="" = zero capabilities
+    var f = document.createElement("iframe");             // no allow-scripts, no same-origin escape
+    f.sandbox = "";
+    /* no srcdoc here at all: an empty one would beat `src` in the render order and show up as text */
+    f.src = slot.dataset.url;
+    slot.appendChild(f);
+  }
+  function renderMedia(slot) {                            // video / audio: native inline playback
+    /* v2.4.x: the old test only matched names containing the literal word "video." - every other .mp4
+       (e.g. my_movie.mp4) became an <audio> element and stayed silent; decide by real extension now */
+    var n = ((slot.dataset.url || "").split("/").pop() || "").toLowerCase();
+    var el = document.createElement(/\.(mp4|webm)$/.test(n) ? "video" : "audio");
+    el.src = slot.dataset.url;
+    el.controls = true;                                   // play/pause, seek, volume - built in
+    el.preload = "metadata";
+    slot.appendChild(el);
+  }
+  function renderGdiPreview(slot, t) {              // v2.4.x: .wmf / .ico / .exe -> server-side GDI+ raster (cached)
+    var im = document.createElement("img");
+    im.style.cssText = (t === "wmf")                                   // big metafiles fill the card
+      ? "width:100%;height:auto;display:block;background:#fff;border-radius:4px"
+      : "max-width:100%;display:block;margin:0 auto;background:#fff";  // icons: native size, centered - no stretch
+    if (t !== "wmf") im.onload = function () {            /* v2.4.x: sub-256 icon -> render 2x */
+      var w = im.naturalWidth, h = im.naturalHeight;
+      if (w > 0 && Math.max(w, h) < 256) {
+        im.style.width = (w * 2) + "px"; im.style.height = (h * 2) + "px"; im.style.maxWidth = "100%";
+      }
+    };
+    im.onerror = () => { slot.textContent = "preview unavailable - download below"; };
+    im.src = "/" + t + "/" + unescape(encodeURIComponent(slot.dataset.url.slice("/files/".length)));
+    slot.appendChild(im);
+  }
+  function hint() {
+    var h = document.createElement("div");
+    h.className = "preview-more";
+    h.textContent = "… open the file for full content";
+    return h;
+  }
+  async function render(slot) {                           // dispatch on data-type, fail soft
+    try {
+      var t = slot.dataset.type;
+      if (t === "pdf") await renderPdf(slot);
+      else if (t === "office") await renderHtmlDoc(slot);
+      else if (t === "markdown") await renderMarkdown(slot);
+      else if (t === "excel") await renderExcel(slot);
+      else if (t === "rtf") await renderRtf(slot);
+      else if (t === "wmf" || t === "ico" || t === "exe") renderGdiPreview(slot, t);
+      else if (t === "text") await renderText(slot);
+      else if (t === "html") renderIframe(slot);
+      else if (t === "media") renderMedia(slot);
+    } catch (e) {                                         // one broken file must not kill the page
+      console.warn("preview failed:", slot.dataset.url, e);
+      slot.textContent = "(preview unavailable - download below)";
+    }
+  }
+  function boot() {
+    var slots = document.querySelectorAll(".preview-slot");
+    for (var i = 0; i < slots.length; i++) render(slots[i]);   // every card, no hover needed
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+  // v2.4.x: the live-update/search render() below replaces #board wholesale, so any
+  // previews filled by boot() would be wiped - every board swap re-invokes this.
+  window.tbRebootPreviews = boot;
+})();
+</script>
 <style id="settingsStyles">
 /* v2.1.4: hold the page invisible until /style.css has loaded and applied (see tb-loaded flag in
    <head>) - no more plain unstyled text + bare pictures for a moment on every full-page reload */
@@ -2170,6 +2404,41 @@ button#emojiBtn:hover { transform: scale(1.12) rotate(-8deg); transition: transf
 .text a.lnk { color: var(--tb-accent, #4a73b5); text-decoration: underline;
   overflow-wrap: anywhere; }
 .text a.lnk:hover { filter: brightness(1.12); }
+/* v2.4.x: in-card previews - theme-independent sizing so every style gets the same edge gap
+   and clamps (per-theme sheets only restyle colours, never layout). Padding on the slot keeps
+   PDF canvas / docx HTML away from card edges; overflow:hidden is the right+bottom clip for
+   text lines that exceed a card. */
+.preview-slot { display: block; width: 100%; box-sizing: border-box;
+  padding: 8px 10px; margin: 4px 0; overflow: hidden; }
+/* plain-text previews (log/csv/ini/...): small mono, hard-capped - long lines clip at the card
+   edge, the bottom stops after ~230 px of preview instead of stretching the tilt */
+.preview-slot pre { font-size: 12px; line-height: 1.45;
+  white-space: pre; overflow: hidden; max-height: 230px; }
+/* markdown / docx previews share one slightly smaller font and a bottom cap - right side is
+   clipped by the slot's own overflow rule above */
+.preview-slot[data-type="markdown"], .preview-slot[data-type="office"] { font-size: 13px;
+  max-height: 420px; }
+/* xlsx preview: SheetJS renders a real <table> - compact grid, clipped on both sides like text */
+.preview-slot[data-type="excel"] { max-height: 420px; overflow: hidden; }
+.preview-slot table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.preview-slot th, .preview-slot td { border: 1px solid rgba(128,128,128,.35); padding: 2px 6px;
+  text-align: left; }
+/* pdf.js paints into a fixed-size canvas - centre it inside its padded slot so the visible gap
+   stays equal on both sides even when fit-to-width leaves slack */
+.preview-slot[data-type="pdf"] canvas { display: block; margin: 0 auto;
+  border-radius: 4px; }
+/* html files and media players fill the card width (gap from slot padding), capped vertically */
+.preview-slot iframe { width: 100%; height: 380px; border: none; display: block; }
+.preview-slot video, .preview-slot audio { width: 100%; max-height: 320px;
+  background: #000; border-radius: 4px; }
+/* v2.4.x: icon-type previews (.ico/.exe) centre the raster on both axes in the remaining
+   card space, and their download link leaves flow for a fixed bottom-centre spot */
+.preview-slot[data-type="ico"], .preview-slot[data-type="exe"] { display: flex;
+  align-items: center; justify-content: center; min-height: 120px; }
+.tilt[data-icard] a.download { position: absolute; bottom: 4px; left: 50%;
+  transform: translateX(-50%); white-space: nowrap; z-index: 1; }
+/* the "more content below" hint added by capBlocks */
+.preview-more { font-size: 11px; opacity: .6; text-align: center; margin-top: 4px; }
 </style>
 <script>/* v2.1.x: last-resort pass - whatever ran earlier (IIFEs, poller, cache),
    the locked page must end up with only the login dialog + settings gear visible.
@@ -2462,6 +2731,13 @@ def render_posts(page: int = 1) -> str:
                          f'<a class="dl" href="{html.escape(attach["url"])}" '
                          f'download="{html.escape(attach["name"], quote=True)}" '
                          f'title="Download">&#11015;</a></span>')
+            elif attach.get("preview"):
+                # v2.3.0: in-card preview slot (renderer below) + download link always kept
+                ptype = html.escape(attach["preview"])
+                extra = (f'<span class="preview-slot" data-type="{ptype}" '
+                         f'data-url="{html.escape(attach["url"])}"></span>'
+                         f'<a class="download" href="{html.escape(attach["url"])}">'
+                         f'\U0001F4C4 {html.escape(attach["name"])}</a>')
             else:
                 extra = (f'<a class="download" href="{html.escape(attach["url"])}">'
                          f'\U0001F4C4 {html.escape(attach["name"])}</a>')
@@ -2479,7 +2755,8 @@ def render_posts(page: int = 1) -> str:
         # the button's identity rides on data-* so one click handler can serve
         # every card - quote=True keeps quotes/newlines inside the attribute
         attach_name = html.escape(attach["name"], quote=True) if attach else ""
-        cards.append(f'<div class="tilt{emoji_cls}" data-c="{post["color"]}" style="--tilt: {tilt} "'
+        icard = ' data-icard' if (attach and attach.get("preview") in ("ico", "exe")) else ""  # v2.4.x
+        cards.append(f'<div class="tilt{emoji_cls}{icard}" data-c="{post["color"]}" style="--tilt: {tilt} "'
                      f'data-text="{html.escape(post["text"], quote=True)}"'
                      f'data-attach="{attach_name}"'
                      f'data-id="{html.escape(str(post.get("id", "")), quote=True)}">{rate_row}{delete_btn}'
@@ -2546,9 +2823,11 @@ class Handler(BaseHTTPRequestHandler):
                     break
                 self.wfile.write(chunk)
                 sent += len(chunk)
-        except (ConnectionResetError, BrokenPipeError):  # client aborted mid-stream (tab closed,
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            # client aborted mid-stream (tab closed, refresh during download): WinError 10054
+            # surfaces as ConnectionResetError, 10053 as ConnectionAbortedError - neither a fault.
             log.info("client %s dropped stream at byte %d/%d - ignored",
-                     self.client_address[0], sent, length)  # refresh during download); not a fault
+                     self.client_address[0], sent, length)
 
     def _css_for(self, name_param: str | None) -> tuple[bytes, bool]:  # (css_bytes, ok)
         """Resolve a /style.css request: an explicit ?name= overrides the config
@@ -2648,6 +2927,25 @@ class Handler(BaseHTTPRequestHandler):
             # one page of JSON alone cannot say "page 2 exists".
             body = json.dumps({"total": len(POSTS), "posts": newest_first}).encode("utf-8")
             self._send(200, body, {"Content-Type": "application/json", "Cache-Control": "no-store"})
+        elif path.startswith("/libs/"):   # v2.3.0: preview libraries (pdf.js / mammoth / marked) from <app-folder>/libs/
+            name = unquote(path[len("/libs/"):])
+            root = os.path.realpath(os.path.join(BASE_DIR, "libs"))
+            real = os.path.realpath(os.path.join(root, name))  # traversal guard (same rule as /logo/, /files/)
+            try:
+                contained = os.path.commonpath([real, root]) == root
+            except ValueError:      # cross-drive / UNC-vs-local mismatch -> outside folder
+                contained = False
+            if not contained or not os.path.isfile(real):
+                self._send(404, b"Not found")
+                return
+            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            with open(real, "rb") as f:
+                body = f.read()
+            # version-pinned files: cache them for a year, re-validated only on app update
+            self._send(200, body, {"Content-Type": ctype,
+                                   "Cache-Control": "public, max-age=31536000"})
+        elif path.startswith(("/wmf/", "/ico/", "/exe/")):  # v2.4.x: GDI+ raster previews (.wmf/.ico/.exe)
+            self._gdi_preview(path)
         elif path.startswith("/logo/"):  # v1.16.1: static assets for header.html from <app-folder>/logo/
             name = unquote(path[len("/logo/"):])
             root = os.path.realpath(os.path.join(BASE_DIR, "logo"))
@@ -2692,18 +2990,288 @@ class Handler(BaseHTTPRequestHandler):
             with open(real, "rb") as f:
                 if ranged and start > 0:  # skip the bytes we already have on the other side
                     f.seek(start)
-                quoted = name.replace("\\", "\\\\").replace('"', '\\"')  # non-ASCII names survive too
+                # v2.4.x: a raw Czech/Chinese filename used to crash send_header here - latin-1
+                # cannot encode ř/ě/č and the whole response died with zero bytes (browser saw
+                # "Failed to fetch"). UTF-8 -> latin-1 smuggling is what every Windows browser expects.
+                quoted = name.replace("\\", "\\\\").replace('"', '\\"').encode("utf-8").decode("latin-1")
+                # v2.4.x: html files must go out WITHOUT the attachment header - a browser that
+                # navigates an inline frame to such a URL paints nothing (the card showed only its
+                # background color). Saving still works: the card's <a download="..."> forces it.
+                dispo = {} if name.lower().endswith((".html", ".htm")) else {"Content-Disposition": f'attachment; filename="{quoted}"'}
                 if ranged:  # 206 partial content - the peer appends to its .part and resumes from start
-                    self._send_stream(206, f, remaining, {"Content-Type": ctype,
-                                                          "Content-Disposition": f'attachment; filename="{quoted}"',
+                    self._send_stream(206, f, remaining, {"Content-Type": ctype, **dispo,
                                                           "Content-Range": f"bytes {start}-{end_inclusive}/{size}",
                                                           "Accept-Ranges": "bytes"})
                 else:  # full file - streamed too, never buffered whole in RAM
-                    self._send_stream(200, f, remaining, {"Content-Type": ctype,
-                                                           "Content-Disposition": f'attachment; filename="{quoted}"',
+                    self._send_stream(200, f, remaining, {"Content-Type": ctype, **dispo,
                                                            "Accept-Ranges": "bytes"})
         else:
             self._send(404, b"Not found")
+
+    def _gdi_preview(self, path: str) -> None:
+        """v2.4.x: serve /wmf/, /ico/ and /exe/ as cached PNG previews (native size).
+
+        Rasterize first when the cache is missing or stale (an early 404 on a cold cache would
+        make conversion unreachable), then verify what actually exists before serving.
+        Every failure is logged with full evidence - a 404 here is exactly what turns a card
+        into 'preview unavailable', so the log must name the reason."""
+        ext = path.split("/")[1]
+        name = unquote(path[len(ext) + 2:])
+        real = os.path.realpath(os.path.join(DATA_FOLDER, name))
+        root = os.path.realpath(DATA_FOLDER)
+        try:
+            contained = os.path.commonpath([real, root]) == root
+        except ValueError:
+            contained = False
+        if not contained or not real.lower().endswith("." + ext):
+            log.warning("%s preview 404 for %r - not in data/ or extension mismatch", ext, name)
+            self._send(404, b"Not found")
+            return
+        cache_dir = os.path.join(BASE_DIR, "_cache", ext)
+        cached = os.path.realpath(os.path.join(cache_dir, os.path.basename(name) + ".png"))
+        if not os.path.isfile(real):
+            log.warning("%s preview 404 for %r - file missing in data/", ext, name)
+            self._send(404, b"Not found")
+            return
+        if not (os.path.isfile(cached) and os.path.getmtime(cached) >= os.path.getmtime(real)):
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                if ext == "exe":  # v2.4.x: [System.Drawing.Icon]::ExtractAssociatedIcon straight on the .exe
+                    if not self._gdi_rasterize(real, cached):           # same call Windows Explorer uses for icons
+                        log.warning("exe preview of %s failed - no usable embedded icon", name)
+                elif ext == "ico":    # v2.4.x: multi-image / PNG-compressed icons can defeat GDI+
+                    if not self._gdi_rasterize(real, cached):
+                        embedded = self._largest_ico_image_bytes(real)
+                        if not embedded:
+                            log.warning("ico preview of %s failed: no embedded raster image", name)
+                        else:
+                            with open(cached + ".raw", "wb") as f:
+                                f.write(embedded)
+                            self._gdi_rasterize(cached + ".raw", cached)  # re-encode via memory stream
+                else:      # wmf
+                    if not self._gdi_rasterize(real, cached):
+                        log.warning("wmf preview of %s failed - GDI+ FromFile rejected it", name)
+            except Exception as e:  # conversion crashed -> client falls back to download-only
+                log.warning("%s preview of %s failed: %s: %s", ext, name,
+                            type(e).__name__, str(e).strip()[:300])
+        if not (os.path.isfile(cached)
+                and cached.startswith(os.path.realpath(cache_dir) + os.sep)):  # traversal guard
+            log.warning("%s preview 404 for %r after conversion - cache empty", ext, name)
+            self._send(404, b"Not found")
+            return
+        with open(cached, "rb") as f:
+            body = f.read()
+        self._send(200, body, {"Content-Type": "image/png", "Cache-Control": "public, max-age=86400"})
+
+    @staticmethod
+    def _largest_ico_image_bytes(ico_path) -> bytes | None:
+        """v2.4.x: biggest embedded raster of a .ico (multi-image files keep every size).
+
+        PNG-compressed entries come back as-is; classic BITMAPINFOHEADER images are re-packed
+        with an ICONDIR so GDI+ can load them from memory. None = no usable raster inside."""
+        import struct
+        try:
+            with open(ico_path, "rb") as f:
+                data = f.read()
+            if len(data) < 6 or data[:4] != b"\x00\x00\x01\x00":
+                return None
+            count = struct.unpack("<H", data[4:6])[0]
+            best, best_w = None, 0
+            for i in range(count):
+                rec = data[6 + i * 16:22 + i * 16]
+                if len(rec) < 16:
+                    break
+                w, h, _cc, _res, planes, bpp, isize, off = struct.unpack("<BBBBHHII", rec)
+                real_w, real_h = (w or 256), (h or 256)
+                chunk = data[off:off + isize]
+                if len(chunk) < isize:
+                    continue
+                if chunk[:8] == b"\x89PNG\r\n\x1a\n":
+                    if real_w > best_w:
+                        best, best_w = bytes(chunk), real_w     # PNG entry - serve verbatim
+                    continue
+                ihdr_size = struct.unpack("<I", chunk[:4])[0] if len(chunk) >= 8 else 0   # BITMAPINFOHEADER biSize
+                pix = chunk[ihdr_size:]
+                bmp = pix + (b"\x00" * (-len(pix) & 3))   # bottom-up, rows padded to 4-byte boundary
+                # re-pack as a single-image ICONDIR so GDI+ FromFile can load it from memory:
+                # header Reserved(H)=0 Type(H)=1 Count(H)=1 + one full IMAGE_ICONDIRENTRY (offset=22)
+                packed_entry = struct.pack("<BBBBHHII",
+                                           w or 256, h or 256,
+                                           struct.unpack_from("<B", rec, 2)[0],
+                                           struct.unpack_from("<B", rec, 3)[0],
+                                           struct.unpack_from("<H", rec, 4)[0],
+                                           struct.unpack_from("<H", rec, 6)[0],
+                                           len(bmp), 22)
+                if real_w > best_w:
+                    best, best_w = (b"\x00\x00\x01\x00" + struct.pack("<H", 1) + packed_entry + bmp), real_w
+            return best
+        except Exception:
+            return None
+
+    @staticmethod
+    def _gdi_rasterize(src: str, dst: str) -> bool:
+        """v2.4.x: render a bare .wmf/.ico (GDI+ FromFile), or an executable's first embedded
+        icon ([System.Drawing.Icon]::ExtractAssociatedIcon), natively sized on a white bitmap.
+        No pip dependency - one external powershell process saves the result as PNG."""
+        # paths arrive via -File args (ps1 stays pure ASCII) - inline interpolation broke on umlaut
+        # and apostrophe file names. [System.Drawing.Icon]::ExtractAssociatedIcon is what Windows
+        # Explorer itself uses for .exe icons; no PE parsing or pip deps needed.
+        img_stmt = ("[System.Drawing.Icon]::ExtractAssociatedIcon($src)"
+                    if src.lower().endswith(".exe")
+                    else "[System.Drawing.Image]::FromFile($src)")
+        script = (
+            "$src = $args[0]\r\n"
+            "$dst = $args[1]\r\n"
+            "try {\r\n"
+            "  Add-Type -AssemblyName System.Drawing\r\n"
+            f"  $img = {img_stmt}\r\n"
+            "  if ($img.Width -lt 2 -or $img.Height -lt 2) { Write-Host 'FAIL: no size'; exit }\r\n"
+            "  $w = [Math]::Min([int]$img.Width, 1920); $h = [int]($img.Height * $w / $img.Width)\r\n"
+            "  if ($h -lt 2) { $h = 2 }\r\n"
+            "  $bmp = New-Object System.Drawing.Bitmap([int]$w,[int]$h)\r\n"
+            "  $g = [System.Drawing.Graphics]::FromImage($bmp)\r\n"
+            "  $g.Clear([System.Drawing.Color]::White)\r\n"
+            "  $g.DrawImage($img,0,0,$bmp.Width,$bmp.Height)\r\n"
+            "  $bmp.Save('OUTPUT',[System.Drawing.Imaging.ImageFormat]::Png)\r\n"
+            "  $g.Dispose(); $bmp.Dispose(); $img.Dispose()\r\n"
+            "  Write-Host SAVED\r\n"
+            "} catch { Write-Host ('FAIL: ' + $_.Exception.Message); exit }\r\n"
+        ).replace("INPUT", src).replace("OUTPUT", dst)
+        # unique per worker thread - two browsers converting different .wmf/.ico/.exe files at once
+        # must not overwrite each other's script mid-run (ThreadingHTTPServer)
+        ps1 = os.path.join(os.path.dirname(dst), "_convert_0x%x.ps1" % threading.get_ident())
+        try:
+            with open(ps1, "w", encoding="ascii") as f:
+                f.write(script)
+            r = subprocess.run(["powershell", "-NoProfile", "-File", ps1, src, dst], capture_output=True,
+                               text=True, timeout=120)
+        finally:
+            try:
+                os.remove(ps1)
+            except OSError:  # powershell may still hold the handle - next run overwrites it
+                pass
+        if "SAVED" not in (r.stdout or ""):  # GDI+ rejected it - let the caller's fallback fire
+            return False
+        log.debug("gdi raster ok: %s -> png in cache", os.path.basename(src))
+        return True
+
+
+    @staticmethod
+    def _extract_first_ex_icon(exe_path) -> bytes | None:
+        """v2.4.x: largest embedded icon image of an executable, straight from the .rsrc section.
+
+        Pure Python (struct only - no pip deps). Walking the PE resource directory tree fails in
+        many binaries (named entries are mislabelled and leaf offsets decode to garbage), so this
+        reads the .rsrc raw file range once and returns the largest image blob found inside: a
+        PNG-compressed icon (Vista+, walked over chunk lengths) or a classic BITMAPINFOHEADER DIB
+        with its AND mask - which is exactly what Windows' own icon picker shows for these files."""
+        import struct
+        try:
+            with open(exe_path, "rb") as f:
+                dos = f.read(64)
+                if len(dos) < 64 or dos[:2] != b"MZ":
+                    return None
+                pe_off = struct.unpack("<I", dos[0x3C:0x40])[0]
+                f.seek(pe_off)
+                if f.read(4) != b"PE\x00\x00":
+                    return None
+                coff = f.read(20)            # Machine H, Nsec H, TDS D, PtrSym D, NumSym D, OptLen H, Char H
+                nsec = struct.unpack("<H", coff[2:4])[0]
+                opt_len = struct.unpack("<H", coff[16:18])[0]   # COFF is 20 bytes; optional header follows it
+                f.seek(pe_off + 24 + opt_len)
+                sec_hdrs, sections = f.read(nsec * 40), []
+                for i in range(nsec):    # section: Name(8) VSize(D) VA(D) RawSize(D) RawPtr(D)
+                    s = sec_hdrs[i * 40:(i + 1) * 40]
+                    vsize, vaddr, rawsize = struct.unpack("<III", s[8:20])
+                    rawptr = struct.unpack("<I", s[20:24])[0]
+                    sections.append((s[:8].rstrip(b"\x00"), vaddr, rawptr, rawsize, vsize))
+                rsrc = next((sec for sec in sections if sec[0] == b".rsrc"), None)
+                if rsrc is None:
+                    return None
+                _nm_r, rv_base, rw_ptr, rs_size, rs_vsize = rsrc   # .rsrc raw file range: [rw_ptr, rw_ptr + span)
+
+                raw_span = rs_size or rs_vsize             # raw size may be 0 on stripped binaries - fall back to virtual size
+                if not (rs_size and rw_ptr < os.path.getsize(exe_path)):
+                    return None                            # malformed section table: .rsrc starts past end of file
+                                                           # (.rsrc need NOT be the last section - read truncates at EOF)
+
+                f.seek(rw_ptr)
+                data = f.read(raw_span)          # whole section in one read - the tree walker below is gone on purpose
+
+                def png_end(start):             # walk chunks (IHDR..IEND) to where this PNG stops, or None if truncated
+                    i = start + 8
+                    while True:
+                        if len(data) < i + 12:
+                            return None
+                        length = struct.unpack("<I", data[i:i+4])[0]
+                        end = i + 12 + length
+                        if data[i+4:i+8] == b"IEND":
+                            return end
+                        i = end                 # next chunk starts right after this one's CRC
+                best_png, best_w = None, 0             # PNG-compressed icon (Vista+) - keep the largest declared width
+                pos = data.find(b"\x89PNG\r\n\x1a\n")
+                while pos >= 0:
+                    if len(data) < pos + 24 or data[pos+12:pos+16] != b"IHDR":   # chunk type field: 8-byte sig, then length(4) + "IHDR"
+                        pass
+                    else:
+                        end = png_end(pos)
+                        pw, _ph = struct.unpack(">HH", data[pos+16:pos+20])      # biWidth/biHeight inside IHDR
+                        if end and (pw or 256) > best_w:
+                            best_png, best_w = data[pos:end], (pw or 256)
+                    pos = data.find(b"\x89PNG\r\n\x1a\n", pos + 8)
+                best_dib, best_px = None, -1          # classic BITMAPINFOHEADER DIB + AND mask - keep the largest pixel count
+                pos = data.find(b"\x28\x00\x00\x00")  # biSize=40 is the first 4 bytes of a BITMAPINFOHEADER
+                while pos >= 0:
+                    if len(data) < pos + 40:
+                        break
+                    w_, h_ = struct.unpack_from("<ii", data, pos + 4)   # height signed: negative = top-down storage
+                    planes_, bpp_ = struct.unpack_from("<HH", data, pos + 12)
+                    comp_, _nrchans = struct.unpack_from("<II", data, pos + 16)
+                    if (planes_ == 1 and bpp_ in (32, 24) and comp_ == 0          # BI_RGB only - palette/compressed stay out of scope
+                            and 0 < w_ <= 512 and abs(h_) <= 512):                # icon-scale sanity bounds
+                        rowbytes = ((w_ * bpp_ + 31) // 32) * 4                   # rows are padded to a DWORD boundary
+                        end = pos + 40 + rowbytes * abs(h_) + (((w_ + 31) // 32) * 4) * abs(h_)   # pixels + AND mask
+                        if end <= len(data):
+                            px_ = w_ * abs(h_)
+                            if px_ > best_px:                       # real icon groups carry >=32x32 entries, so stray pixel hits lose
+                                best_dib, best_px = data[pos:end], px_
+                    pos = data.find(b"\x28\x00\x00\x00", pos + 4)
+                if best_w * best_w >= abs(best_px):      # PNG wins on area - it is the sharper rendition of the same icon
+                    return best_png
+                log.debug("ex-icon: no image blob inside .rsrc (%s, %d bytes)", os.path.basename(exe_path), len(data))
+                return best_dib or None
+        except Exception as e:   # corrupt / partially readable exe - fail soft, download link still works
+            log.debug("ex-icon extract failed for %s: %s", os.path.basename(exe_path), e)
+            return None
+
+    @staticmethod
+    def _wrap_ex_icon_blob(raw: bytes | None) -> bytes | None:
+        """v2.4.x: RT_ICON payloads are raw image streams, not .ico containers.
+
+        PNG entries already load under any extension (GDI+ sniffs content), classic images are
+        bare BITMAPINFOHEADER DIBs with an AND mask glued on - GDI+'s icon codec only detects a
+        proper ICONDIR header, so re-pack those into a single-image .ico exactly like the .ico
+        fallback does. None in -> None out (caller logs + download-only)."""
+        import struct
+        if not raw or len(raw) < 4:
+            return None
+        if raw[:8] == b"\x89PNG\r\n\x1a\n":
+            # PNG-compressed icon (Vista+) - pass through VERBATIM, no ICONDIR re-pack: GDI+ sniffs
+            # the PNG signature itself, and a synthetic entry around it would just be extra bytes
+            # that make its image-size decode disagree with the IHDR. Serve as-is.
+            return raw
+        if len(raw) >= 40 and struct.unpack("<I", raw[0:4])[0] == 40 \
+                and 0 < abs(struct.unpack_from("<i", raw, 4)[0]) <= 512:
+            # classic BITMAPINFOHEADER DIB (+ AND mask): GDI+'s icon codec needs a real ICONDIR
+            w = struct.unpack_from("<I", raw, 4)[0]
+            h = abs(struct.unpack_from("<i", raw, 8)[0]) or w   # height signed: negative = top-down
+            planes, bpp = struct.unpack_from("<HH", raw, 12)
+            entry = struct.pack("<BBBBHHII",
+                                w % 256 or 256, h % 256 or 256,
+                                0, 0, planes & 0xFFFF or 1, bpp & 0xFFFF or 32,
+                                len(raw), 22)
+            return b"\x00\x00\x01\x00" + struct.pack("<H", 1) + entry + raw
+        return None
 
     def _auth_gate(self) -> str | None:
         """v2.1.0 - role for this request ('full'/'ro'), or None after a 401 JSON body was sent."""
@@ -2893,8 +3461,12 @@ class Handler(BaseHTTPRequestHandler):
                    json.dumps({"ok": bool(stored), "stored": stored}).encode())
 
     def _upload_chunk(self):
-        """POST /upload/chunk, header X-Stored-Name (+ X-Chunk-Offset) - write one chunk to disk."""
-        real = _stored_path(self.headers.get("X-Stored-Name"))
+        """POST /upload/chunk, header X-Stored-Name (+ X-Chunk-Offset) - write one chunk to disk.
+
+        v2.4.x: clients percent-encode the stored name for ISO-8859-1-only headers (Czech etc.); unquote
+        restores it exactly - an ASCII name without '%' passes through untouched."""
+        stored_name = urllib.parse.unquote(self.headers.get("X-Stored-Name") or "")
+        real = _stored_path(stored_name)
         if not real:  # unknown or escaping name -> nothing to append to
             self._send(404, json.dumps({"ok": False, "error": "unknown upload"}).encode())
             return
@@ -2925,7 +3497,7 @@ class Handler(BaseHTTPRequestHandler):
             except OSError:
                 size = -1
             log.debug("action=upload/chunk stored=%s offset=%d wrote=%d bytes file-size=%d",
-                      self.headers.get("X-Stored-Name"), offset, total - remaining, size)
+                      stored_name, offset, total - remaining, size)
         self._send(200, json.dumps({"ok": True}).encode())
 
     def _upload_abort(self):
@@ -3298,8 +3870,8 @@ def _sync_push_file(stored_name: str) -> None:
                 break
             req = urllib.request.Request(SYNC_REMOTE + "/upload/chunk",
                                          data=part,
-                                         headers={**_sync_headers(),
-                                                   "X-Stored-Name": stored_name,
+                                         headers={**_sync_headers(),  # v2.4.x: same ISO-8859-1 header rule as the browser
+                                                   "X-Stored-Name": urllib.parse.quote(stored_name),
                                                    "X-Chunk-Offset": str(off),
                                                    "Content-Type": "application/octet-stream"})
             with urllib.request.urlopen(req, timeout=60) as resp:
